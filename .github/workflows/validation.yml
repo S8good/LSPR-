@@ -36,6 +36,13 @@ jobs:
         run: |
           python -m pytest tests/test_data_access.py tests/test_validate_migration.py
 
+      - name: Prepare validation database
+        run: |
+          mkdir -p data
+          if [ ! -f data/nanosense_data.db ]; then
+            python -m scripts.generate_demo_database --output data/nanosense_data.db --force
+          fi
+
       - name: Run migration validation
         run: |
           python scripts/validate_migration.py --db "data/nanosense_data.db" --max-latency 600 --batch-status --sample-rate 0 --strict --report-file docs/reports/validation_summary.txt --history-file docs/reports/validation_history.csv
