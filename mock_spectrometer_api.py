@@ -6,8 +6,8 @@ from nanosense.utils.config_manager import load_settings # 【新增】导入配
 
 class Wrapper:
     """
-    一个【可配置的】模拟光谱仪API。
-    它可以根据配置文件模拟静态峰、动态动力学或纯噪声。
+    一个【可配置的】模拟光谱仪API
+    它可以根据配置文件模拟静态峰、动态动力学或纯噪声
     """
 
     def __init__(self):

@@ -38,7 +38,7 @@ def show_welcome_screen(use_real_hardware=True):
 
 def launch_main_app(mode_name, use_real_hardware):
     """
-    【已升级】这个函数现在会在硬件连接失败时返回欢迎页，而不是退出。
+    【已升级】这个函数现在会在硬件连接失败时返回欢迎页，而不是退出
     """
     global main_app_window, welcome_screen
 
