@@ -3,7 +3,9 @@ import json
 import os
 import time
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+import numpy as np
 from PyQt5.QtWidgets import (
     QMainWindow, QStackedWidget, QMessageBox, QDialog, 
     QFileDialog, QAction, QApplication, QInputDialog
@@ -36,6 +38,7 @@ from .spectrum_classification_dialog import SpectrumClassificationDialog
 from nanosense.utils.file_io import load_spectra_from_path, load_spectrum
 from nanosense.core.controller import FX2000Controller
 from nanosense.core.spectrum_processor import SpectrumProcessor
+from nanosense.ml.cnn_predictor import CNNSpectrumPredictor
 from nanosense.core.batch_acquisition import BatchRunDialog, BatchAcquisitionWorker
 from ..core.database_manager import DatabaseManager
 from ..utils.config_manager import load_settings, save_settings
@@ -75,6 +78,7 @@ class AppWindow(QMainWindow):
         self.current_project_id = None
         self.current_experiment_id = None
         self._skip_spectrum_classification_prompt = False
+        self._cnn_predictors = {}
         
         # 初始化数据库和项目
         print("开始初始化数据库...")
@@ -257,6 +261,7 @@ class AppWindow(QMainWindow):
         menu.calibration_action.triggered.connect(self._open_calibration_dialog)
         menu.performance_action.triggered.connect(self._open_performance_dialog)
         menu.find_main_peak_action.triggered.connect(self._trigger_find_main_peak)
+        menu.cnn_predict_compare_action.triggered.connect(self._trigger_cnn_predict_compare)
         menu.lspr_simulation_action.triggered.connect(self._open_lspr_simulation)
         menu.batch_acquisition_action.triggered.connect(self._start_batch_acquisition)
         menu.data_analysis_action.triggered.connect(self._open_data_analysis_dialog)
@@ -1300,6 +1305,157 @@ class AppWindow(QMainWindow):
                 self.tr("Info"),
                 self.tr("No spectra could be loaded from the selected file.")
             )
+
+    def _resolve_encoder_path(self, model_mode: str) -> Path:
+        probe = CNNSpectrumPredictor()
+        if model_mode == "stage1":
+            return probe.get_stage1_encoder_path()
+        if model_mode == "stage2":
+            return probe.get_stage2_encoder_path()
+        raise ValueError(f"Unknown model mode: {model_mode}")
+
+    def _get_cnn_predictor(self, model_mode: str):
+        if model_mode in self._cnn_predictors:
+            return self._cnn_predictors[model_mode]
+
+        encoder_path = self._resolve_encoder_path(model_mode)
+        predictor = CNNSpectrumPredictor(encoder_path=encoder_path)
+        self._cnn_predictors[model_mode] = predictor
+        return predictor
+
+    def _choose_predict_model_mode(self) -> Optional[str]:
+        mode_map = {
+            self.tr("Stage2 only (Recommended)"): "stage2",
+            self.tr("Fusion (Stage1 + Stage2)"): "fusion",
+            self.tr("Stage1 only"): "stage1",
+        }
+        reverse_map = {v: k for k, v in mode_map.items()}
+        current_mode = str(self.app_settings.get("cnn_predict_model_mode", "stage2")).lower()
+        current_text = reverse_map.get(current_mode, self.tr("Stage2 only (Recommended)"))
+        options = list(mode_map.keys())
+
+        selected_text, ok = QInputDialog.getItem(
+            self,
+            self.tr("Select Prediction Model"),
+            self.tr("Choose model mode:"),
+            options,
+            options.index(current_text) if current_text in options else 0,
+            False,
+        )
+        if not ok:
+            return None
+
+        selected_mode = mode_map.get(selected_text, "stage2")
+        self.app_settings["cnn_predict_model_mode"] = selected_mode
+        save_settings(self.app_settings)
+        return selected_mode
+
+    def _predict_with_fusion(self, x_data, y_data, topk: int = 3):
+        # Weighted probability fusion: prioritize stage2 while preserving stage1 complementary signal.
+        weight_stage2 = 0.7
+        pred_stage2 = self._get_cnn_predictor("stage2").predict(x_data, y_data, topk=max(3, topk))
+        pred_stage1 = self._get_cnn_predictor("stage1").predict(x_data, y_data, topk=max(3, topk))
+
+        class_ids = sorted(set(pred_stage2.class_probs.keys()) | set(pred_stage1.class_probs.keys()))
+        fused_probs: Dict[int, float] = {}
+        for cid in class_ids:
+            p2 = float(pred_stage2.class_probs.get(cid, 0.0))
+            p1 = float(pred_stage1.class_probs.get(cid, 0.0))
+            fused_probs[cid] = weight_stage2 * p2 + (1.0 - weight_stage2) * p1
+
+        pred_class_id = max(fused_probs.keys(), key=lambda cid: fused_probs[cid])
+        pred_class_name = pred_stage2.id_to_label.get(pred_class_id, str(pred_class_id))
+        confidence = float(fused_probs[pred_class_id])
+
+        sorted_items = sorted(fused_probs.items(), key=lambda kv: kv[1], reverse=True)[: max(1, int(topk))]
+        topk_list = [
+            {
+                "class_id": int(cid),
+                "class_name": pred_stage2.id_to_label.get(int(cid), str(cid)),
+                "prob": float(prob),
+            }
+            for cid, prob in sorted_items
+        ]
+
+        p2 = self._get_cnn_predictor("stage2").get_normalized_prototype_for_class(pred_class_id)
+        p1 = self._get_cnn_predictor("stage1").get_normalized_prototype_for_class(pred_class_id)
+        pred_proto = (weight_stage2 * p2 + (1.0 - weight_stage2) * p1).astype(np.float32)
+
+        from nanosense.ml.cnn_predictor import CNNPredictionResult
+        return CNNPredictionResult(
+            pred_class_id=int(pred_class_id),
+            pred_class_name=str(pred_class_name),
+            confidence=confidence,
+            topk=topk_list,
+            class_probs={int(k): float(v) for k, v in fused_probs.items()},
+            class_ids=np.asarray(class_ids, dtype=np.int64),
+            id_to_label=dict(pred_stage2.id_to_label),
+            target_wavelengths=pred_stage2.target_wavelengths.copy(),
+            query_norm=pred_stage2.query_norm.copy(),
+            pred_prototype_norm=pred_proto,
+        )
+
+    def _trigger_cnn_predict_compare(self):
+        model_mode = self._choose_predict_model_mode()
+        if model_mode is None:
+            return
+
+        default_load_path = self.app_settings.get('default_load_path', '')
+        x_data, y_data, file_path = load_spectrum(self, default_load_path)
+        if x_data is None or y_data is None:
+            return
+
+        spectrum_name = os.path.basename(file_path) if file_path else self.tr("Loaded Spectrum")
+        try:
+            if model_mode == "fusion":
+                result = self._predict_with_fusion(x_data, y_data, topk=3)
+            else:
+                predictor = self._get_cnn_predictor(model_mode)
+                result = predictor.predict(x_data, y_data, topk=3)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self.tr("CNN Prediction Failed"),
+                self.tr("Prediction failed: {0}").format(str(exc))
+            )
+            return
+
+        spectra_list = [
+            {
+                'x': result.target_wavelengths,
+                'y': result.query_norm,
+                'name': f"{spectrum_name} (normalized input)",
+                'category': 'absorbance',
+            },
+            {
+                'x': result.target_wavelengths,
+                'y': result.pred_prototype_norm,
+                'name': f"Predicted prototype: {result.pred_class_name}",
+                'category': 'reference',
+            },
+        ]
+
+        analysis_win = AnalysisWindow(spectra_data=spectra_list, parent=self)
+        self.analysis_windows.append(analysis_win)
+        analysis_win.show()
+
+        topk_lines = []
+        for item in result.topk:
+            topk_lines.append(f"{item['class_name']}: {item['prob'] * 100:.2f}%")
+        mode_text = {
+            "stage2": self.tr("Stage2 only"),
+            "stage1": self.tr("Stage1 only"),
+            "fusion": self.tr("Fusion (Stage1 + Stage2)"),
+        }.get(model_mode, model_mode)
+        msg = (
+            f"{self.tr('Model Mode')}: {mode_text}\n"
+            f"{self.tr('Spectrum')}: {spectrum_name}\n"
+            f"{self.tr('Predicted Class')}: {result.pred_class_name}\n"
+            f"{self.tr('Confidence')}: {result.confidence * 100:.2f}%\n"
+            f"{self.tr('Top-k')}:\n- " + "\n- ".join(topk_lines)
+        )
+        QMessageBox.information(self, self.tr("CNN Prediction Result"), msg)
+
     def _trigger_find_peaks(self):
         """触发查找所有峰值"""
         if self.stacked_widget.currentWidget() is self.measurement_page:
