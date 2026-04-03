@@ -33,6 +33,7 @@ from .settings_dialog import SettingsDialog
 from .about_dialog import AboutDialog
 from .mock_api_config_dialog import MockAPIConfigDialog
 from .lspr_simulation_widget import LSPRSimulationWidget
+from .lspr_ai_analysis_window import LSPRAIAnalysisWindow
 from .spectrum_classification_dialog import SpectrumClassificationDialog
 
 from ..utils.file_io import load_spectra_from_path, load_spectrum
@@ -70,6 +71,7 @@ class AppWindow(QMainWindow):
         self.analysis_windows = []
         self.db_explorer_window = None
         self.lspr_simulation_window = None
+        self.lspr_workbench_window = None
         self.controller = None
         self._hardware_mode_warning_shown = False
         self._menu_bar = None
@@ -259,6 +261,7 @@ class AppWindow(QMainWindow):
         menu.calibration_action.triggered.connect(self._open_calibration_dialog)
         menu.performance_action.triggered.connect(self._open_performance_dialog)
         menu.find_main_peak_action.triggered.connect(self._trigger_find_main_peak)
+        menu.lspr_ai_workbench_action.triggered.connect(self._open_lspr_ai_workbench)
         menu.lspr_simulation_action.triggered.connect(self._open_lspr_simulation)
         menu.batch_acquisition_action.triggered.connect(self._start_batch_acquisition)
         menu.data_analysis_action.triggered.connect(self._open_data_analysis_dialog)
@@ -1347,47 +1350,60 @@ class AppWindow(QMainWindow):
         dialog.exec_()
     def _open_settings_dialog(self):
         """
-        打开设置对话框，允许用户自定义参数。
+        ??????????????????
         """
-        # 保存当前主题设置
         current_theme = self.app_settings.get('theme', 'dark')
-        
+
         dialog = SettingsDialog(self.app_settings, self)
         if dialog.exec_() == QDialog.Accepted:
             updated_settings = dialog.get_settings()
             self.app_settings.update(updated_settings)
             save_settings(self.app_settings)
-            
-            # 检查主题是否发生变化
+
             new_theme = self.app_settings.get('theme', 'dark')
-            theme_changed = (new_theme != current_theme)
-            
+            theme_changed = new_theme != current_theme
+
             new_db_path = self.app_settings.get('database_path')
             if self.db_manager is None or self.db_manager.db_path != new_db_path:
                 if self.db_manager:
                     self.db_manager.close()
                 self.db_manager = DatabaseManager(new_db_path)
                 self._find_or_create_default_project()
-                
+
                 QMessageBox.information(
-                    self, 
-                    self.tr("Info"), 
+                    self,
+                    self.tr("Info"),
                     self.tr(
                         "Database connection has been updated. "
                         "A restart may be required for all features to use the new database."
                     )
                 )
-            
-            # 如果主题发生了变化，应用新主题
+
             if theme_changed:
                 self.apply_styles()
                 self._sync_theme_actions()
-            
+
             QMessageBox.information(
                 self,
                 self.tr("Success"),
                 self.tr("Default paths have been saved.")
             )
+
+    def _open_lspr_ai_workbench(self, wavelengths=None, intensities=None, metadata=None):
+        if self.lspr_workbench_window is None:
+            self.lspr_workbench_window = LSPRAIAnalysisWindow(config=self.app_settings, parent=self)
+
+        if wavelengths is not None and intensities is not None:
+            self.lspr_workbench_window.set_input_spectrum(
+                wavelengths,
+                intensities,
+                metadata=metadata or {},
+            )
+
+        self.lspr_workbench_window.show()
+        self.lspr_workbench_window.raise_()
+        self.lspr_workbench_window.activateWindow()
+
     def _open_sensitivity_dialog(self):
         """打开灵敏度分析对话框"""
         dialog = SensitivityDialog(self)

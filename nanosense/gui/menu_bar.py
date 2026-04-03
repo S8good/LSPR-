@@ -34,6 +34,7 @@ class MenuBar(QMenuBar):
         self.performance_action = QAction(self.tr('Detection Performance (LOB/LOD/LOQ)...'), self)
         self.find_main_peak_action = QAction(self.tr('Find Main Peak in Current Spectrum'), self)
         self.find_main_peak_action.setShortcut('Ctrl+P')
+        self.lspr_ai_workbench_action = QAction(self.tr('LSPR AI Workbench...'), self)
         self.lspr_simulation_action = QAction(self.tr('LSPR Sensor Simulation'), self)
         # Data Menu Actions
         self.batch_acquisition_action = QAction(self.tr('Batch Acquisition Setup'), self)
@@ -81,6 +82,7 @@ class MenuBar(QMenuBar):
         self.analysis_menu.addSeparator()
         self.analysis_menu.addAction(self.find_main_peak_action)
         self.analysis_menu.addSeparator()
+        self.analysis_menu.addAction(self.lspr_ai_workbench_action)
         self.lspr_simulation_menu_item = self.analysis_menu.addAction(self.lspr_simulation_action)
         self.noise_analysis_menu = self.analysis_menu.addMenu(self.tr('Noise Analysis'))
         self.noise_analysis_menu.addAction(self.import_noise_action)
@@ -161,6 +163,7 @@ class MenuBar(QMenuBar):
         self.logging_system_action.setText(self.tr('Logging System...'))
 
         self.find_main_peak_action.setText(self.tr('Find Main Peak in Current Spectrum'))
+        self.lspr_ai_workbench_action.setText(self.tr('LSPR AI Workbench...'))
         self.lspr_simulation_action.setText(self.tr('LSPR Sensor Simulation'))
 
         self.about_action.setText(self.tr('About'))
