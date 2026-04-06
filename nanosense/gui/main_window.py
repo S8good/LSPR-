@@ -232,6 +232,7 @@ class AppWindow(QMainWindow):
         self.stacked_widget.addWidget(self.colorimetry_page)
         
         self.measurement_page.back_button.hide()
+        self.measurement_page.send_to_lspr_ai_requested.connect(self._open_lspr_ai_workbench_from_payload)
     def _connect_menu_signals(self):
         """连接菜单信号"""
         menu = self.menuBar()
@@ -969,6 +970,8 @@ class AppWindow(QMainWindow):
                     self.measurement_page.kinetics_window.noise_trend_plot
                 ]:
                     self.measurement_page.kinetics_window._style_plot(plot)
+            if hasattr(self, 'lspr_workbench_window') and self.lspr_workbench_window:
+                self.lspr_workbench_window.refresh_theme()
         except Exception:
             pass  # 忽略错误
     def _persist_imported_spectra(self, base_label: str, spectra_entries: List[Dict[str, Any]], import_context: Dict[str, Any]):
@@ -1382,6 +1385,8 @@ class AppWindow(QMainWindow):
             if theme_changed:
                 self.apply_styles()
                 self._sync_theme_actions()
+                if self.lspr_workbench_window:
+                    self.lspr_workbench_window.refresh_theme()
 
             QMessageBox.information(
                 self,
@@ -1882,6 +1887,8 @@ class AppWindow(QMainWindow):
         
         # 应用样式
         self.apply_styles()
+        if self.lspr_workbench_window:
+            self.lspr_workbench_window.refresh_theme()
         
         # 同步菜单选中状态
         menu = getattr(self, '_menu_bar', None)
@@ -1955,6 +1962,7 @@ class AppWindow(QMainWindow):
         # 创建新实例并将其存储在 self.db_explorer_window 中
         self.db_explorer_window = DatabaseExplorerDialog(parent=self)
         self.db_explorer_window.load_spectra_requested.connect(self._open_analysis_window_from_db)
+        self.db_explorer_window.open_lspr_ai_requested.connect(self._open_lspr_ai_workbench_from_payload)
         
         # 使用 .show() 而不是 .exec_()
         self.db_explorer_window.show()
@@ -1969,3 +1977,26 @@ class AppWindow(QMainWindow):
         analysis_win = AnalysisWindow(spectra_data=spectra_list, parent=self)
         self.analysis_windows.append(analysis_win)
         analysis_win.show()
+
+    def _open_lspr_ai_workbench_from_payload(self, payload):
+        if not payload:
+            return
+
+        wavelengths = payload.get("wavelengths")
+        intensities = payload.get("intensities")
+        metadata = dict(payload.get("metadata", {}))
+
+        input_context = payload.get("input_context")
+        if (not wavelengths or not intensities) and isinstance(input_context, dict):
+            spectrum = input_context.get("spectrum") or {}
+            wavelengths = wavelengths or spectrum.get("wavelengths")
+            intensities = intensities or spectrum.get("intensities")
+            metadata = dict(spectrum.get("metadata", {})) | metadata
+            metadata.setdefault("analysis_run_id", payload.get("analysis_run_id"))
+            metadata.setdefault("source_type", input_context.get("source_type"))
+
+        self._open_lspr_ai_workbench(wavelengths=wavelengths, intensities=intensities, metadata=metadata)
+
+        if self.lspr_workbench_window is not None and hasattr(self.lspr_workbench_window, "apply_archived_run_detail"):
+            if payload.get("analysis_run_id") is not None:
+                self.lspr_workbench_window.apply_archived_run_detail(payload)
