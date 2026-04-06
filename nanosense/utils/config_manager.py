@@ -4,6 +4,7 @@ import os
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".nanosense")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+_LEGACY_BACKEND_MODES = {"auto", "inprocess", "subprocess"}
 
 
 def get_default_settings():
@@ -16,7 +17,10 @@ def get_default_settings():
         "theme": "dark",
         "database_path": default_db_path,
         "lspr_master_root": "",
-        "lspr_default_model_mode": "auto",
+        "lspr_backend_mode": "auto",
+        "lspr_subprocess_python": "",
+        "lspr_subprocess_timeout_seconds": 20,
+        "lspr_default_inference_model": "auto",
         "lspr_default_artifact_dir": "",
         "lspr_enable_digital_twin_overlay": True,
         "lspr_batch_export_dir": "",
@@ -34,6 +38,22 @@ def get_default_settings():
         },
     }
 
+def _migrate_legacy_lspr_settings(settings):
+    migrated = dict(settings)
+    legacy_mode = migrated.pop("lspr_default_model_mode", None)
+    if legacy_mode is None:
+        return migrated
+
+    legacy_mode_str = str(legacy_mode).strip()
+    lowered = legacy_mode_str.lower()
+    if lowered in _LEGACY_BACKEND_MODES:
+        migrated.setdefault("lspr_backend_mode", lowered)
+        migrated.setdefault("lspr_default_inference_model", "auto")
+    else:
+        migrated.setdefault("lspr_backend_mode", "auto")
+        migrated.setdefault("lspr_default_inference_model", legacy_mode_str)
+    return migrated
+
 
 def load_settings():
     defaults = get_default_settings()
@@ -42,7 +62,7 @@ def load_settings():
 
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as handle:
-            settings = json.load(handle)
+            settings = _migrate_legacy_lspr_settings(json.load(handle))
         for key, value in defaults.items():
             settings.setdefault(key, value)
             if isinstance(value, dict):

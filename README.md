@@ -9,6 +9,7 @@
 - 动力学、灵敏度、校准、亲和力和检测性能分析
 - 批量孔板采集与批量分析
 - 数据库归档、浏览、导出与治理
+- LSPR AI 工作台：单谱预测、谱线对比、数字孪生、多模型比较和批量预测
 - LSPR 仿真与结果导出
 - 结构化迁移、验证与治理脚本
 
@@ -197,6 +198,24 @@ Raman 模式下除了基础采谱与预处理，还提供：
 - 默认文件读写路径设置
 - Mock API 配置
 
+### 2.11 LSPR AI 工作台
+
+分析菜单中的 `LSPR AI Workbench...` 已集成 `DeepLearning/LSPR_Spectra_Master` 的推理能力，当前支持：
+
+- 单谱浓度预测与报告文本
+- 输入谱、生成谱、对齐谱的可视化对比
+- 数字孪生浓度滑块与物理指标查看
+- 多模型比较
+- 文件夹 / 多列表文件的批量预测
+- 结果归档到数据库，并在数据库浏览器的 `AI Runs` 标签页中回看
+
+工作台当前支持以下入口：
+
+- 分析菜单直接打开
+- 测量页 `Send to LSPR AI Workbench`
+- 数据库浏览器 `Open in LSPR AI Workbench`
+- 数据库浏览器 `AI Runs` 标签页中重新打开已归档结果
+
 ---
 
 ## 3. 软件界面与工作流
@@ -267,6 +286,7 @@ python scripts/generate_demo_database.py --output data/demo_database.db --force
 - 是否能在 `Mock API` 模式下正常采集
 - 数据库路径是否可写
 - 是否能打开数据库浏览器
+- 是否能从分析菜单打开 `LSPR AI Workbench...`
 
 ---
 
@@ -294,6 +314,16 @@ Mock API 当前支持的模式：
 - `dynamic`
 - `static`
 - `noisy_baseline`
+
+LSPR AI 工作台相关配置当前至少包括：
+
+- `lspr_master_root`
+- `lspr_backend_mode`
+- `lspr_subprocess_python`
+- `lspr_subprocess_timeout_seconds`
+- `lspr_default_inference_model`
+- `lspr_default_artifact_dir`
+- `lspr_batch_export_dir`
 
 如果使用真实硬件：
 
@@ -440,6 +470,8 @@ pytest tests
 ### 10.2 算法相关
 
 - Raman 数据库匹配结果适合作为辅助判读，不应替代人工确认
+- `LSPR AI Workbench` 默认推荐使用 `backend_mode=auto`；在当前工作站环境下，`auto` 往往会实际回退到 `subprocess`，这属于预期行为而不是故障
+- 从数据库浏览器重新打开 `AI Runs` 依赖归档时保存的输入谱与比较元数据；旧版历史分析记录若缺少这些字段，可能只能查看指标而无法完整恢复图形
 
 ### 10.3 文档与数据库相关
 
@@ -451,6 +483,7 @@ pytest tests
 如需进一步了解数据库浏览器演示方式，建议先看：
 
 - `docs/ui/database_explorer_demo.md`
+- `docs/lspr_ai_workbench/lspr-ai-workbench-user-guide.md`
 
 如需理解当前数据库结构，建议看：
 

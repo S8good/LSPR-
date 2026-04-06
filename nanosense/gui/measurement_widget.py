@@ -40,6 +40,7 @@ from nanosense.core.spectrum_processor import SpectrumProcessor
 
 class MeasurementWidget(QWidget):
     kinetics_data_updated = pyqtSignal(dict)
+    send_to_lspr_ai_requested = pyqtSignal(dict)
 
     def __init__(self, controller: FX2000Controller, processor: SpectrumProcessor, parent=None):
         super().__init__(parent)
@@ -522,9 +523,11 @@ class MeasurementWidget(QWidget):
         self.save_all_button = QPushButton(self.tr("Save All Spectra"))
         self.save_data_button = QPushButton(self.tr("Save Result Spectrum"))
         self.load_data_button = QPushButton(self.tr("Load Spectrum for Comparison"))
+        self.send_to_lspr_ai_button = QPushButton(self.tr("Send to LSPR AI Workbench"))
         data_op_layout.addWidget(self.save_all_button)
         data_op_layout.addWidget(self.save_data_button)
         data_op_layout.addWidget(self.load_data_button)
+        data_op_layout.addWidget(self.send_to_lspr_ai_button)
         self.data_op_box.setContentLayout(data_op_layout)
         panel_layout.addWidget(self.data_op_box)
 
@@ -757,6 +760,7 @@ class MeasurementWidget(QWidget):
         self.find_main_peak_button.clicked.connect(self._find_main_resonance_peak)
         self.save_data_button.clicked.connect(self._save_result_spectrum)
         self.load_data_button.clicked.connect(self._load_spectrum_data_for_comparison)
+        self.send_to_lspr_ai_button.clicked.connect(self._send_current_result_to_lspr_ai_workbench)
         self.set_baseline_button.clicked.connect(self._set_kinetics_baseline_from_current_peak)
         self.toggle_kinetics_button.clicked.connect(self._toggle_kinetics_window)
         # 波长/波数切换
@@ -1607,6 +1611,23 @@ Do you wish to continue?'''),
             if self.controller:
                 self.controller.set_laser_state(False)
 
+    def _send_current_result_to_lspr_ai_workbench(self):
+        if self.full_result_x is None or self.full_result_y is None:
+            QMessageBox.warning(self, self.tr("Warning"), self.tr("No result spectrum available to send."))
+            return
+
+        payload = {
+            "wavelengths": np.asarray(self.full_result_x, dtype=float).tolist(),
+            "intensities": np.asarray(self.full_result_y, dtype=float).tolist(),
+            "metadata": {
+                "name": f"{self.mode_name} Result",
+                "source": "measurement_widget",
+                "source_type": "measurement_widget",
+                "label": f"{self.mode_name} Result",
+            },
+        }
+        self.send_to_lspr_ai_requested.emit(payload)
+
     def _on_excitation_wavelength_changed(self, value):
         """
         处理激发波长变化
@@ -1685,6 +1706,7 @@ Do you wish to continue?'''),
             self.tr("Start Acquisition") if not self.is_acquiring else self.tr("Stop Acquisition"))
         self.capture_dark_button.setText(self.tr("Capture Background (Dark)"))
         self.capture_ref_button.setText(self.tr("Capture Reference (Ref)"))
+        self.send_to_lspr_ai_button.setText(self.tr("Send to LSPR AI Workbench"))
 
 
         self.params_layout.labelForField(self.integration_time_spinbox).setText(self.tr("Integration Time:"))

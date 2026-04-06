@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 
@@ -5,17 +6,64 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from nanosense.utils.config_manager import get_default_settings
+import nanosense.utils.config_manager as config_manager
+from nanosense.ml.lspr_master_bridge import LSPRMasterBridge
+from nanosense.utils.config_manager import get_default_settings, load_settings
 
 
 def test_default_settings_include_lspr_ai_workbench_keys():
     settings = get_default_settings()
 
     assert settings["lspr_master_root"] == ""
-    assert settings["lspr_default_model_mode"] == "auto"
+    assert settings["lspr_backend_mode"] == "auto"
+    assert settings["lspr_subprocess_python"] == ""
+    assert settings["lspr_subprocess_timeout_seconds"] == 20
+    assert settings["lspr_default_inference_model"] == "auto"
     assert settings["lspr_default_artifact_dir"] == ""
     assert settings["lspr_enable_digital_twin_overlay"] is True
     assert settings["lspr_batch_export_dir"] == ""
+
+
+def test_load_settings_migrates_legacy_lspr_default_model_mode_to_backend_mode(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".nanosense"
+    config_file = config_dir / "config.json"
+    config_dir.mkdir()
+    config_file.write_text(
+        json.dumps(
+            {
+                "lspr_default_model_mode": "subprocess",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_manager, "CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(config_manager, "CONFIG_FILE", str(config_file))
+
+    settings = load_settings()
+
+    assert settings["lspr_backend_mode"] == "subprocess"
+    assert settings["lspr_default_inference_model"] == "auto"
+
+
+def test_load_settings_migrates_legacy_lspr_default_model_mode_to_default_inference_model(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".nanosense"
+    config_file = config_dir / "config.json"
+    config_dir.mkdir()
+    config_file.write_text(
+        json.dumps(
+            {
+                "lspr_default_model_mode": "v2_fusion",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_manager, "CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(config_manager, "CONFIG_FILE", str(config_file))
+
+    settings = load_settings()
+
+    assert settings["lspr_backend_mode"] == "auto"
+    assert settings["lspr_default_inference_model"] == "v2_fusion"
 
 
 def test_settings_dialog_contains_lspr_ai_controls():
@@ -23,7 +71,10 @@ def test_settings_dialog_contains_lspr_ai_controls():
 
     assert "LSPR AI" in settings_dialog_source
     assert "lspr_master_root" in settings_dialog_source
-    assert "lspr_default_model_mode" in settings_dialog_source
+    assert "lspr_backend_mode" in settings_dialog_source
+    assert "lspr_subprocess_python" in settings_dialog_source
+    assert "lspr_subprocess_timeout_seconds" in settings_dialog_source
+    assert "lspr_default_inference_model" in settings_dialog_source
     assert "lspr_default_artifact_dir" in settings_dialog_source
     assert "lspr_batch_export_dir" in settings_dialog_source
     assert "lspr_enable_digital_twin_overlay" in settings_dialog_source
@@ -36,6 +87,17 @@ def test_main_window_wires_lspr_ai_workbench_opening():
     assert "lspr_ai_workbench_action" in main_window_source
     assert "lspr_workbench_window" in main_window_source
     assert "LSPRAIAnalysisWindow" in main_window_source
+    assert "send_to_lspr_ai_requested.connect" in main_window_source
+    assert "open_lspr_ai_requested.connect" in main_window_source
+
+
+def test_workbench_module_is_compatibility_wrapper_for_analysis_window():
+    workbench_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_ai_workbench.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from .lspr_ai_analysis_window import LSPRAIAnalysisWindow" in workbench_source
+    assert "class LSPRAIWorkbench(LSPRAIAnalysisWindow)" in workbench_source
 
 
 def test_new_lspr_ai_analysis_window_copies_analysis_capabilities():
@@ -70,6 +132,8 @@ def test_new_lspr_ai_analysis_window_copies_analysis_capabilities():
     assert "Batch Prediction" in workbench_source
     assert "lspr_model_comparison_widget" in workbench_source
     assert "lspr_batch_prediction_widget" in workbench_source
+    assert "def refresh_theme" in workbench_source
+    assert "self.setStyleSheet(" in workbench_source
 
 
 def test_digital_twin_widget_exists_with_minimal_controls():
@@ -187,6 +251,10 @@ def test_model_comparison_widget_exists_with_minimal_controls():
     assert "Run Model Comparison" in widget_source
     assert "comparison_table" in widget_source
     assert "comparison_plot" in widget_source
+    assert "model_selection_list" in widget_source
+    assert "recommended_model_label" in widget_source
+    assert "def refresh_theme" in widget_source
+    assert "setBackground(" in widget_source
 
 
 def test_batch_prediction_widget_exists_with_minimal_controls():
@@ -198,12 +266,53 @@ def test_batch_prediction_widget_exists_with_minimal_controls():
     assert "Load Multi-column File..." in widget_source
     assert "Run Batch Prediction" in widget_source
     assert "results_table" in widget_source
+    assert "Export CSV..." in widget_source
+    assert "row_activated" in widget_source
+    assert "def refresh_theme" in widget_source
+
+
+def test_analysis_window_connects_batch_rows_back_to_current_analysis_view():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_ai_analysis_window.py"
+    ).read_text(encoding="utf-8")
+
+    assert "row_activated.connect" in widget_source
+    assert "_open_batch_prediction_detail" in widget_source
+
+
+def test_measurement_widget_exposes_signal_for_sending_current_spectrum_to_lspr_ai():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "measurement_widget.py"
+    ).read_text(encoding="utf-8")
+
+    assert "send_to_lspr_ai_requested = pyqtSignal(dict)" in widget_source
+    assert "Send to LSPR AI Workbench" in widget_source
+    assert "send_to_lspr_ai_requested.emit" in widget_source
+
+
+def test_database_explorer_supports_ai_runs_and_reopen_to_lspr_ai():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "database_explorer.py"
+    ).read_text(encoding="utf-8")
+
+    assert "open_lspr_ai_requested = pyqtSignal(dict)" in widget_source
+    assert "AI Runs" in widget_source
+    assert "_update_ai_runs_tab" in widget_source
+    assert "_open_selected_lspr_ai" in widget_source
+    assert "open_lspr_ai_requested.emit" in widget_source
+
+
+def test_main_window_updates_lspr_workbench_theme_when_theme_changes():
+    main_window_source = (PROJECT_ROOT / "nanosense" / "gui" / "main_window.py").read_text(encoding="utf-8")
+
+    assert "refresh_theme()" in main_window_source
+    assert "lspr_workbench_window" in main_window_source
 
 
 def test_ai_engine_maps_stage3_modes_to_fusion_predictor():
     ai_engine_source = (
-        PROJECT_ROOT / ".." / "DeepLearning" / "LSPR_Spectra_Master" / "src" / "core" / "ai_engine.py"
-    ).resolve().read_text(encoding="utf-8")
+        LSPRMasterBridge().master_root / "src" / "core" / "ai_engine.py"
+    ).read_text(encoding="utf-8")
 
     assert "add_mode('v2_cycle', 'fusion'" in ai_engine_source
     assert "add_mode('stage3_3a_fixed_frozen', 'fusion'" in ai_engine_source

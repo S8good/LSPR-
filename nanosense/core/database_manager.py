@@ -1152,6 +1152,68 @@ class DatabaseManager:
 
             return None
 
+    def save_lspr_ai_prediction(
+            self,
+            *,
+            experiment_id: int,
+            metrics: Dict[str, Any],
+            input_context: Dict[str, Any],
+            analysis_type: str = "lspr_ai_prediction",
+            algorithm_version: Optional[str] = None,
+    ) -> Optional[int]:
+
+        if not self.conn:
+            return None
+
+        try:
+            cursor = self.conn.cursor()
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            payload = json.dumps(input_context or {}, ensure_ascii=False)
+
+            cursor.execute(
+                """
+                INSERT INTO analysis_runs (
+                    experiment_id,
+                    batch_run_item_id,
+                    analysis_type,
+                    algorithm_version,
+                    status,
+                    started_at,
+                    finished_at,
+                    initiated_by,
+                    input_context
+                ) VALUES (?, NULL, ?, ?, 'completed', ?, ?, NULL, ?)
+                """,
+                (experiment_id, analysis_type, algorithm_version, timestamp, timestamp, payload),
+            )
+            analysis_run_id = cursor.lastrowid
+
+            primary_metric_key = "predicted_concentration_ng_ml"
+            for metric_key, metric_value in (metrics or {}).items():
+                unit = None
+                if metric_key in {"predicted_concentration_ng_ml", "uloq_ng_ml"}:
+                    unit = "ng/ml"
+                cursor.execute(
+                    """
+                    INSERT INTO analysis_metrics (analysis_run_id, metric_key, metric_value, unit, is_primary)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        analysis_run_id,
+                        str(metric_key),
+                        self._stringify_metric_value(metric_value),
+                        unit,
+                        1 if metric_key == primary_metric_key else 0,
+                    ),
+                )
+
+            self.conn.commit()
+            return analysis_run_id
+        except Exception as e:
+            self.conn.rollback()
+            print(f"保存 LSPR AI 预测结果失败: {e}")
+            return None
+
     def search_experiments(
             self,
             project_id=-1,

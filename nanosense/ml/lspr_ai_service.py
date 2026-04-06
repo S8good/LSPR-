@@ -159,7 +159,12 @@ class LSPRAIService:
             except Exception as exc:
                 row['comparison_error'] = str(exc)
             rows.append(row)
-        return {'rows': rows, 'comparisons': comparisons}
+        return {
+            'rows': rows,
+            'comparisons': comparisons,
+            'available_model_modes': modes,
+            'recommended_model_mode': 'auto',
+        }
 
     def predict_batch(self, items: List[Dict[str, Any]], model_mode: str = 'auto', metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         response = self.backend.predict_batch(BatchPredictRequest(items=list(items), model_mode=model_mode, metadata=metadata or {}))
