@@ -58,6 +58,7 @@ class SortableTableWidgetItem(QTableWidgetItem):
 
 class DatabaseExplorerDialog(QDialog):
     load_spectra_requested = pyqtSignal(list)#定义一个信号
+    open_lspr_ai_requested = pyqtSignal(dict)
     def __init__(self, parent=None):
         super().__init__(parent)
         # show standard window controls
@@ -82,6 +83,7 @@ class DatabaseExplorerDialog(QDialog):
         self._detail_watcher: Optional["QFutureWatcher"] = None
         self._current_batch_rows: List[Dict[str, Any]] = []
         self._filtered_batch_rows: List[Dict[str, Any]] = []
+        self._current_ai_runs: List[Dict[str, Any]] = []
         self._init_ui()
         self._connect_signals()
         self._retranslate_ui()
@@ -237,16 +239,39 @@ class DatabaseExplorerDialog(QDialog):
         batch_layout.addWidget(self.batch_table)
         self.detail_tabs.addTab(batch_tab, self.tr("Batch Overview"))
 
+        ai_runs_tab = QWidget()
+        ai_runs_layout = QVBoxLayout(ai_runs_tab)
+        self.ai_runs_table = QTableWidget()
+        self.ai_runs_table.setColumnCount(7)
+        self.ai_runs_table.setHorizontalHeaderLabels(
+            [
+                self.tr("Run ID"),
+                self.tr("Started At"),
+                self.tr("Status"),
+                self.tr("Prediction"),
+                self.tr("Generator"),
+                self.tr("Concentration"),
+                self.tr("Fallback"),
+            ]
+        )
+        self.ai_runs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ai_runs_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.ai_runs_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        ai_runs_layout.addWidget(self.ai_runs_table)
+        self.detail_tabs.addTab(ai_runs_tab, self.tr("AI Runs"))
+
         self.results_hint_label = QLabel()
         self.results_hint_label.setText("")
 
         action_buttons_layout = QHBoxLayout()
         self.load_spectra_button = QPushButton()
+        self.open_lspr_ai_button = QPushButton()
         self.export_button = QPushButton()
         self.delete_button = QPushButton()
 
         action_buttons_layout.addStretch()
         action_buttons_layout.addWidget(self.load_spectra_button)
+        action_buttons_layout.addWidget(self.open_lspr_ai_button)
         action_buttons_layout.addWidget(self.export_button)
         action_buttons_layout.addWidget(self.delete_button)
 
@@ -263,6 +288,7 @@ class DatabaseExplorerDialog(QDialog):
         self.search_button.clicked.connect(self._search_database)
         self.reset_button.clicked.connect(self._reset_filters)
         self.load_spectra_button.clicked.connect(self._load_selected_spectra)
+        self.open_lspr_ai_button.clicked.connect(self._open_selected_lspr_ai)
         self.export_button.clicked.connect(self._export_selected_data)
         self.status_combo.currentIndexChanged.connect(self._search_database)
         self.operator_edit.textChanged.connect(self._search_database)
@@ -304,6 +330,7 @@ class DatabaseExplorerDialog(QDialog):
 
         # 操作按钮
         self.load_spectra_button.setText(self.tr("Load Spectra to Analysis"))
+        self.open_lspr_ai_button.setText(self.tr("Open in LSPR AI Workbench"))
         self.export_button.setText(self.tr("Export Selected..."))
         self.delete_button.setText(self.tr("Delete Selected"))
 
@@ -696,6 +723,7 @@ class DatabaseExplorerDialog(QDialog):
             self._update_experiment_tab(payload.get("overview"))
             self._update_spectra_tab(payload.get("spectra") or [])
             self._update_batch_tab(payload.get("batch") or [])
+            self._update_ai_runs_tab(payload.get("ai_runs") or [])
             return
 
         token = object()
@@ -714,6 +742,7 @@ class DatabaseExplorerDialog(QDialog):
             overview = self.data_access.fetch_experiment_overview(experiment_id)
             spectra_rows = self.data_access.fetch_spectrum_sets(experiment_id, limit=100)
             batch_rows = self.data_access.fetch_batch_overview(experiment_id)
+            ai_run_rows = self.data_access.fetch_lspr_ai_runs(experiment_id)
         except Exception as exc:
             payload["error"] = str(exc)
             return payload
@@ -722,6 +751,7 @@ class DatabaseExplorerDialog(QDialog):
                 "overview": overview,
                 "spectra": spectra_rows,
                 "batch": batch_rows,
+                "ai_runs": ai_run_rows,
             }
         )
         return payload
@@ -745,6 +775,7 @@ class DatabaseExplorerDialog(QDialog):
         self._update_experiment_tab(result.get("overview"))
         self._update_spectra_tab(result.get("spectra") or [])
         self._update_batch_tab(result.get("batch") or [])
+        self._update_ai_runs_tab(result.get("ai_runs") or [])
 
     def _clear_detail_tabs(self):
         placeholder = self.tr("—")
@@ -756,8 +787,11 @@ class DatabaseExplorerDialog(QDialog):
             self.spectra_table.setRowCount(0)
         if hasattr(self, "batch_table"):
             self.batch_table.setRowCount(0)
+        if hasattr(self, "ai_runs_table"):
+            self.ai_runs_table.setRowCount(0)
         self._current_batch_rows = []
         self._filtered_batch_rows = []
+        self._current_ai_runs = []
         placeholder = self.tr("—")
 
     def _update_experiment_tab(self, overview: Optional[Dict[str, Any]]):
@@ -799,6 +833,32 @@ class DatabaseExplorerDialog(QDialog):
         self._current_batch_rows = batch_rows or []
         self._populate_batch_status_filter()
         self._apply_batch_filters()
+
+    def _update_ai_runs_tab(self, ai_runs: List[Dict[str, Any]]):
+        self._current_ai_runs = ai_runs or []
+        self.ai_runs_table.setRowCount(0)
+        if not self._current_ai_runs:
+            return
+
+        columns = [
+            "analysis_run_id",
+            "started_at",
+            "status",
+            "resolved_prediction_model",
+            "resolved_generator_model",
+            "predicted_concentration_ng_ml",
+            "fallback_applied",
+        ]
+        self.ai_runs_table.setRowCount(len(self._current_ai_runs))
+        for row_idx, row in enumerate(self._current_ai_runs):
+            for col_idx, key in enumerate(columns):
+                value = row.get(key)
+                if key == "fallback_applied":
+                    value = "Yes" if value else "No"
+                item = QTableWidgetItem("" if value is None else str(value))
+                self.ai_runs_table.setItem(row_idx, col_idx, item)
+        if self.ai_runs_table.rowCount() > 0:
+            self.ai_runs_table.selectRow(0)
 
     def _populate_batch_status_filter(self):
         if not hasattr(self, "batch_status_filter"):
@@ -870,5 +930,38 @@ class DatabaseExplorerDialog(QDialog):
         if row_index < 0 or row_index >= len(self._filtered_batch_rows):
             return None
         return self._filtered_batch_rows[row_index]
+
+    def _open_selected_lspr_ai(self):
+        if self.data_access and self.detail_tabs.currentWidget() == self.detail_tabs.widget(3) and self._current_ai_runs:
+            row_index = self.ai_runs_table.currentRow()
+            if row_index < 0 or row_index >= len(self._current_ai_runs):
+                return
+            analysis_run_id = self._current_ai_runs[row_index].get("analysis_run_id")
+            if analysis_run_id is None:
+                return
+            detail = self.data_access.fetch_lspr_ai_run_detail(int(analysis_run_id))
+            if detail:
+                self.open_lspr_ai_requested.emit(detail)
+            return
+
+        selected_experiment_id = self._get_selected_experiment_id()
+        if selected_experiment_id is None or not self.db_manager:
+            return
+        spectra_list = self.db_manager.get_spectra_for_experiments([selected_experiment_id])
+        if not spectra_list:
+            return
+        first = spectra_list[0]
+        self.open_lspr_ai_requested.emit(
+            {
+                "wavelengths": first.get("x").tolist() if hasattr(first.get("x"), "tolist") else first.get("x"),
+                "intensities": first.get("y").tolist() if hasattr(first.get("y"), "tolist") else first.get("y"),
+                "metadata": {
+                    "name": first.get("name", "Database Spectrum"),
+                    "source": "database_explorer",
+                    "source_type": "database_explorer",
+                    "experiment_id": selected_experiment_id,
+                },
+            }
+        )
 
 

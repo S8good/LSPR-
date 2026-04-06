@@ -4,6 +4,7 @@ Batch-friendly data access helpers for the database explorer.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -370,4 +371,100 @@ class ExplorerDataAccess:
             "instrument_temperature": row[11],
             "processing_name": row[12],
             "processing_version": row[13],
+        }
+
+    def fetch_lspr_ai_runs(self, experiment_id: int) -> List[Dict[str, Any]]:
+        cursor = self.conn.execute(
+            """
+            SELECT ar.analysis_run_id,
+                   ar.analysis_type,
+                   ar.algorithm_version,
+                   ar.status,
+                   ar.started_at,
+                   ar.finished_at,
+                   ar.input_context,
+                   conc.metric_value AS predicted_concentration_ng_ml,
+                   mode.metric_value AS report_mode
+            FROM analysis_runs ar
+            LEFT JOIN analysis_metrics AS conc
+                ON conc.analysis_run_id = ar.analysis_run_id
+               AND conc.metric_key = 'predicted_concentration_ng_ml'
+            LEFT JOIN analysis_metrics AS mode
+                ON mode.analysis_run_id = ar.analysis_run_id
+               AND mode.metric_key = 'report_mode'
+            WHERE ar.experiment_id = ?
+              AND ar.analysis_type = 'lspr_ai_prediction'
+            ORDER BY ar.started_at DESC, ar.analysis_run_id DESC
+            """,
+            (experiment_id,),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            input_context = json.loads(row[6]) if row[6] else {}
+            rows.append(
+                {
+                    "analysis_run_id": row[0],
+                    "analysis_type": row[1],
+                    "algorithm_version": row[2],
+                    "status": row[3],
+                    "started_at": row[4],
+                    "finished_at": row[5],
+                    "input_context": input_context,
+                    "predicted_concentration_ng_ml": row[7],
+                    "report_mode": row[8],
+                    "resolved_prediction_model": input_context.get("resolved_prediction_model"),
+                    "resolved_generator_model": input_context.get("resolved_generator_model"),
+                    "fallback_applied": bool(input_context.get("fallback_applied", False)),
+                }
+            )
+        return rows
+
+    def fetch_lspr_ai_run_detail(self, analysis_run_id: int) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.execute(
+            """
+            SELECT analysis_run_id,
+                   experiment_id,
+                   analysis_type,
+                   algorithm_version,
+                   status,
+                   started_at,
+                   finished_at,
+                   input_context
+            FROM analysis_runs
+            WHERE analysis_run_id = ?
+            """,
+            (analysis_run_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        metrics_cursor = self.conn.execute(
+            """
+            SELECT metric_key, metric_value, unit, is_primary
+            FROM analysis_metrics
+            WHERE analysis_run_id = ?
+            ORDER BY is_primary DESC, metric_key ASC
+            """,
+            (analysis_run_id,),
+        )
+        metrics = {
+            metric_row[0]: {
+                "value": metric_row[1],
+                "unit": metric_row[2],
+                "is_primary": bool(metric_row[3]),
+            }
+            for metric_row in metrics_cursor.fetchall()
+        }
+
+        return {
+            "analysis_run_id": row[0],
+            "experiment_id": row[1],
+            "analysis_type": row[2],
+            "algorithm_version": row[3],
+            "status": row[4],
+            "started_at": row[5],
+            "finished_at": row[6],
+            "input_context": json.loads(row[7]) if row[7] else {},
+            "metrics": metrics,
         }

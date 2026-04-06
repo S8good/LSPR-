@@ -109,6 +109,50 @@ def test_subprocess_backend_prepends_conda_dll_paths():
     assert "C:/ProgramData/anaconda3/envs/py39/Library/bin;" in path_value
 
 
+def test_subprocess_backend_uses_sys_executable_when_configured_python_is_blank():
+    backend = SubprocessLSPRBackend(config={"lspr_subprocess_python": ""})
+
+    assert backend.python_executable == sys.executable
+
+
+def test_subprocess_backend_retries_with_fallback_python_candidates(monkeypatch):
+    backend = SubprocessLSPRBackend(config={"lspr_subprocess_python": ""})
+    calls = []
+
+    monkeypatch.setattr(backend, "_python_candidates", lambda: ["bad.exe", "good.exe"])
+
+    def fake_invoke_with_python(python_executable, command, payload):
+        calls.append(python_executable)
+        if python_executable == "bad.exe":
+            return {
+                "ok": False,
+                "backend": "subprocess",
+                "details": {"stderr": "dll init failed", "returncode": 1},
+                "error": {"code": "runner_failed", "message": "dll init failed"},
+            }
+        return {
+            "ok": True,
+            "backend": "subprocess",
+            "model_mode": "v1",
+            "predicted_concentration_ng_ml": 1.23,
+            "report_mode": "quantitative",
+            "reported_text": "1.2300 ng/ml",
+            "uloq_ng_ml": 18.0,
+            "super_quant_bin": None,
+            "metrics": {},
+            "error": None,
+        }
+
+    monkeypatch.setattr(backend, "_invoke_runner_with_python", fake_invoke_with_python)
+
+    result = backend.predict_single(
+        PredictSingleRequest(wavelengths=[500.0, 501.0], intensities=[0.1, 0.2], model_mode="v1")
+    )
+
+    assert result.ok is True
+    assert calls == ["bad.exe", "good.exe"]
+
+
 def test_inprocess_backend_health_check_reports_import_failure(monkeypatch):
     backend = InProcessLSPRBackend(config={})
 

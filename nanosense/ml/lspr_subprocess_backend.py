@@ -26,7 +26,23 @@ class SubprocessLSPRBackend(LSPRBackend):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.timeout_seconds = int(self.config.get('lspr_subprocess_timeout_seconds', 20))
-        self.python_executable = str(self.config.get('lspr_subprocess_python', sys.executable))
+        configured_python = self.config.get('lspr_subprocess_python')
+        self.python_executable = str(configured_python).strip() if configured_python else sys.executable
+
+    def _python_candidates(self):
+        configured = str(self.config.get('lspr_subprocess_python') or '').strip()
+        candidates = []
+        if configured:
+            candidates.append(configured)
+        else:
+            candidates.append(sys.executable)
+            for extra in (
+                r"C:/ProgramData/anaconda3/envs/py39/python.exe",
+                r"C:/ProgramData/anaconda3/envs/gan/python.exe",
+            ):
+                if extra not in candidates and Path(extra).exists():
+                    candidates.append(extra)
+        return candidates
 
     def _resolve_runner_path(self) -> Optional[Path]:
         explicit = self.config.get('lspr_runner_path')
@@ -54,7 +70,7 @@ class SubprocessLSPRBackend(LSPRBackend):
             return candidate_roots[0] / 'scripts' / 'lspr_bridge_runner.py'
         return None
 
-    def _invoke_runner(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _invoke_runner_with_python(self, python_executable: str, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         runner_path = self._resolve_runner_path()
         if runner_path is None or not runner_path.exists():
             return {
@@ -63,9 +79,9 @@ class SubprocessLSPRBackend(LSPRBackend):
                 'details': {'command': command, 'runner_path': str(runner_path) if runner_path else None},
                 'error': {'code': 'runner_missing', 'message': 'subprocess runner does not exist'},
             }
-        env = self._build_subprocess_env()
+        env = self._build_subprocess_env(python_executable)
         proc = subprocess.run(
-            [self.python_executable, str(runner_path), command],
+            [python_executable, str(runner_path), command],
             input=json.dumps(payload, ensure_ascii=False),
             capture_output=True,
             text=True,
@@ -97,6 +113,21 @@ class SubprocessLSPRBackend(LSPRBackend):
             'error': {'code': 'invalid_json', 'message': 'subprocess returned invalid JSON'},
         }
 
+    def _invoke_runner(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        last_result = None
+        for python_executable in self._python_candidates():
+            result = self._invoke_runner_with_python(python_executable, command, payload)
+            if result.get('ok'):
+                self.python_executable = python_executable
+                return result
+            last_result = result
+        return last_result or {
+            'ok': False,
+            'backend': 'subprocess',
+            'details': {'command': command},
+            'error': {'code': 'runner_failed', 'message': 'subprocess execution failed'},
+        }
+
     @staticmethod
     def _parse_runner_json(stdout_text: str) -> Optional[Dict[str, Any]]:
         text = (stdout_text or '').strip()
@@ -118,9 +149,9 @@ class SubprocessLSPRBackend(LSPRBackend):
         except json.JSONDecodeError:
             return None
 
-    def _build_subprocess_env(self) -> Dict[str, str]:
+    def _build_subprocess_env(self, python_executable: Optional[str] = None) -> Dict[str, str]:
         env = os.environ.copy()
-        python_path = Path(self.python_executable).expanduser().resolve()
+        python_path = Path(python_executable or self.python_executable).expanduser().resolve()
         env_root = python_path.parent
         prepend = []
         for candidate in (env_root / 'bin', env_root / 'Library' / 'bin', env_root / 'Scripts'):

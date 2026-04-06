@@ -120,6 +120,9 @@ def test_service_predict_single_returns_expected_summary_fields():
     assert result.predicted_concentration_ng_ml == 12.34
     assert result.reported_text == "12.3400 ng/ml"
     assert result.metrics["peak_wavelength_nm"] == 612.5
+    assert result.prediction_model_mode == "auto"
+    assert result.prediction_backend == "stub"
+    assert result.fallback_applied is False
 
 
 def test_service_build_comparison_returns_visual_arrays():
@@ -128,22 +131,28 @@ def test_service_build_comparison_returns_visual_arrays():
     result = service.build_spectrum_comparison(
         wavelengths=[500.0, 501.0, 502.0],
         intensities=[0.1, 0.2, 0.3],
+        prediction_model_mode="v2",
+        generator_model_mode="v2_cycle",
     )
 
     assert result.wavelengths == [500.0, 501.0, 502.0]
     assert result.input_spectrum == [0.1, 0.2, 0.3]
     assert result.generated_spectrum == [0.11, 0.21, 0.31]
     assert result.aligned_spectrum == [0.12, 0.22, 0.32]
+    assert result.generator_model_mode == "auto"
+    assert result.generator_backend == "stub"
+    assert result.generator_supported is True
 
 
 def test_service_build_digital_twin_returns_expected_metrics():
     service = LSPRAIService(backend=_StubBackend())
 
-    result = service.build_digital_twin_context(concentration_ng_ml=5.0)
+    result = service.build_digital_twin_context(concentration_ng_ml=5.0, generator_model_mode="stage3_3a_fixed_frozen")
 
     assert result.metrics["peak_wavelength_nm"] == 610.0
     assert result.metrics["delta_lambda_nm"] == 1.5
     assert result.ai_spectrum == [0.14, 0.15, 0.16]
+    assert result.generator_model_mode == "stage3_3a_fixed_frozen"
 
 
 def test_service_raises_runtime_error_when_backend_returns_error_response():
@@ -169,9 +178,12 @@ def test_service_compare_models_returns_one_row_per_model_mode():
         model_modes=["v1", "v2"],
     )
 
-    assert len(result["rows"]) == 2
-    assert result["rows"][0]["model_mode"] == "v1"
-    assert result["rows"][1]["model_mode"] == "v2"
+    assert len(result["prediction_rows"]) == 2
+    assert result["prediction_rows"][0]["prediction_model_mode"] == "v1"
+    assert result["prediction_rows"][1]["prediction_model_mode"] == "v2"
+    assert result["available_prediction_model_modes"] == ["v1", "v2"]
+    assert result["recommended_prediction_model_mode"] == "auto"
+    assert result["recommended_generator_model_mode"] == "auto"
 
 
 def test_service_predict_batch_returns_structured_rows():
@@ -202,7 +214,39 @@ def test_compare_models_continues_when_one_mode_fails():
         model_modes=["v1", "bad_mode", "v2"],
     )
 
-    assert len(result["rows"]) == 3
-    assert result["rows"][1]["model_mode"] == "bad_mode"
-    assert result["rows"][1]["report_mode"] == "error"
-    assert "bad mode" in result["rows"][1]["reported_text"]
+    assert len(result["prediction_rows"]) == 3
+    assert result["prediction_rows"][1]["prediction_model_mode"] == "bad_mode"
+    assert result["prediction_rows"][1]["report_mode"] == "error"
+    assert "bad mode" in result["prediction_rows"][1]["reported_text"]
+
+
+def test_service_compare_models_uses_discovered_modes_when_not_provided(monkeypatch):
+    service = LSPRAIService(backend=_StubBackend(), config={"lspr_master_root": "C:/stub"})
+    monkeypatch.setattr(service, "discover_model_modes", lambda: ["v2", "v2_fusion"])
+
+    result = service.compare_models(
+        wavelengths=[500.0, 501.0, 502.0],
+        intensities=[0.1, 0.2, 0.3],
+    )
+
+    assert [row["prediction_model_mode"] for row in result["prediction_rows"]] == ["v2", "v2_fusion"]
+    assert result["available_prediction_model_modes"] == ["v2", "v2_fusion"]
+
+
+def test_service_supports_distinct_prediction_and_generator_modes():
+    service = LSPRAIService(backend=_StubBackend())
+
+    prediction = service.predict_single_spectrum(
+        wavelengths=[500.0, 501.0, 502.0],
+        intensities=[0.1, 0.2, 0.3],
+        prediction_model_mode="v2",
+    )
+    comparison = service.build_spectrum_comparison(
+        wavelengths=[500.0, 501.0, 502.0],
+        intensities=[0.1, 0.2, 0.3],
+        prediction_model_mode="v2",
+        generator_model_mode="stage3_3a_fixed_frozen",
+    )
+
+    assert prediction.prediction_model_mode == "auto"
+    assert comparison.generator_model_mode == "auto"

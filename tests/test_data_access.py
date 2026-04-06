@@ -26,6 +26,12 @@ def setup_conn() -> sqlite3.Connection:
     conn.execute(
         "CREATE TABLE processing_snapshots (processing_config_id INTEGER PRIMARY KEY, name TEXT, version TEXT)"
     )
+    conn.execute(
+        "CREATE TABLE analysis_runs (analysis_run_id INTEGER PRIMARY KEY, experiment_id INTEGER, analysis_type TEXT, algorithm_version TEXT, status TEXT, started_at TEXT, finished_at TEXT, initiated_by INTEGER, input_context TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE analysis_metrics (analysis_run_id INTEGER, metric_key TEXT, metric_value TEXT, unit TEXT, is_primary INTEGER)"
+    )
     return conn
 
 
@@ -83,3 +89,49 @@ def test_fetch_batch_overview_returns_items_for_experiment():
     assert rows[0]["position_label"] == "A1"
     assert rows[0]["item_status"] == "completed"
     assert rows[0]["capture_count"] == 5
+
+
+def test_fetch_lspr_ai_runs_returns_archived_prediction_runs():
+    conn = setup_conn()
+    conn.execute(
+        "INSERT INTO analysis_runs VALUES (11, 3, 'lspr_ai_prediction', 'v2', 'completed', '2025-01-01 10:00:00', '2025-01-01 10:00:01', NULL, '{\"requested_prediction_model\":\"auto\",\"resolved_prediction_model\":\"v2\",\"requested_generator_model\":\"stage3_3a_fixed_frozen\",\"resolved_generator_model\":\"stage3_3a_fixed_frozen\",\"fallback_applied\":false}')"
+    )
+    conn.execute(
+        "INSERT INTO analysis_metrics VALUES (11, 'predicted_concentration_ng_ml', '12.34', 'ng/ml', 1)"
+    )
+    conn.execute(
+        "INSERT INTO analysis_metrics VALUES (11, 'report_mode', 'quantitative', NULL, 0)"
+    )
+    access = ExplorerDataAccess(conn)
+
+    rows = access.fetch_lspr_ai_runs(3)
+
+    assert len(rows) == 1
+    assert rows[0]["analysis_run_id"] == 11
+    assert rows[0]["analysis_type"] == "lspr_ai_prediction"
+    assert rows[0]["predicted_concentration_ng_ml"] == "12.34"
+    assert rows[0]["resolved_prediction_model"] == "v2"
+    assert rows[0]["resolved_generator_model"] == "stage3_3a_fixed_frozen"
+    assert rows[0]["fallback_applied"] is False
+
+
+def test_fetch_lspr_ai_run_detail_returns_metrics_and_context():
+    conn = setup_conn()
+    conn.execute(
+        "INSERT INTO analysis_runs VALUES (11, 3, 'lspr_ai_prediction', 'v2', 'completed', '2025-01-01 10:00:00', '2025-01-01 10:00:01', NULL, '{\"requested_prediction_model\":\"auto\",\"resolved_prediction_model\":\"v2\",\"requested_generator_model\":\"stage3_3a_fixed_frozen\",\"resolved_generator_model\":\"stage3_3a_fixed_frozen\",\"fallback_applied\":false,\"source_type\":\"database\"}')"
+    )
+    conn.execute(
+        "INSERT INTO analysis_metrics VALUES (11, 'predicted_concentration_ng_ml', '12.34', 'ng/ml', 1)"
+    )
+    conn.execute(
+        "INSERT INTO analysis_metrics VALUES (11, 'report_mode', 'quantitative', NULL, 0)"
+    )
+    access = ExplorerDataAccess(conn)
+
+    detail = access.fetch_lspr_ai_run_detail(11)
+
+    assert detail is not None
+    assert detail["analysis_run_id"] == 11
+    assert detail["input_context"]["resolved_prediction_model"] == "v2"
+    assert detail["input_context"]["resolved_generator_model"] == "stage3_3a_fixed_frozen"
+    assert detail["metrics"]["predicted_concentration_ng_ml"]["value"] == "12.34"

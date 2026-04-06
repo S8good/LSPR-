@@ -59,18 +59,24 @@ class InProcessLSPRBackend(LSPRBackend):
     def predict_single(self, request: PredictSingleRequest) -> PredictionResponse:
         try:
             engine = self._get_bridge().create_ai_engine()
-            predicted = float(engine.predict_concentration(list(request.intensities), model_mode=request.model_mode))
+            prediction_details = engine.predict_concentration_details(list(request.intensities), model_mode=request.model_mode)
+            predicted = float(prediction_details['predicted_concentration_ng_ml'])
             report = engine.interpret_concentration(predicted)
             return PredictionResponse(
                 ok=True,
                 backend='inprocess',
-                model_mode=request.model_mode,
+                model_mode=prediction_details.get('resolved_prediction_model', request.model_mode),
                 predicted_concentration_ng_ml=predicted,
                 report_mode=report.get('mode'),
                 reported_text=report.get('reported_text'),
                 uloq_ng_ml=report.get('uloq_ng_ml'),
                 super_quant_bin=report.get('super_quant_bin'),
-                metrics={},
+                metrics={
+                    'requested_prediction_model': prediction_details.get('requested_prediction_model'),
+                    'resolved_prediction_model': prediction_details.get('resolved_prediction_model'),
+                    'fallback_applied': bool(prediction_details.get('fallback_applied', False)),
+                    'fallback_reason': prediction_details.get('fallback_reason'),
+                },
             )
         except Exception as exc:
             return PredictionResponse(
@@ -93,13 +99,14 @@ class InProcessLSPRBackend(LSPRBackend):
                 engine=engine,
                 intensities=list(request.intensities),
                 model_mode=request.model_mode,
+                metadata=dict(request.metadata or {}),
             )
             raw_spectrum = np.asarray(result.get('pred_spectrum_raw', []), dtype=float).reshape(-1)
             generator_supported = bool(raw_spectrum.size > 1 and np.ptp(raw_spectrum) > 1e-8)
             return ComparisonResponse(
                 ok=True,
                 backend='inprocess',
-                model_mode=result.get('model_mode', request.model_mode),
+                model_mode=result.get('resolved_generator_model', result.get('model_mode', request.model_mode)),
                 wavelengths=list(np.asarray(result.get('wavelengths', []), dtype=float)),
                 input_spectrum=list(np.asarray(result.get('input_resampled', []), dtype=float)),
                 generated_spectrum=list(np.asarray(result.get('pred_spectrum_raw', []), dtype=float)),
@@ -114,6 +121,12 @@ class InProcessLSPRBackend(LSPRBackend):
                     'intensity_scale': float(result.get('intensity_scale', 1.0)),
                     'intensity_offset': float(result.get('intensity_offset', 0.0)),
                     'generator_supported': generator_supported,
+                    'requested_prediction_model': result.get('requested_prediction_model'),
+                    'resolved_prediction_model': result.get('resolved_prediction_model'),
+                    'requested_generator_model': result.get('requested_generator_model'),
+                    'resolved_generator_model': result.get('resolved_generator_model'),
+                    'fallback_applied': bool(result.get('fallback_applied', False)),
+                    'fallback_reason': result.get('fallback_reason'),
                 },
             )
         except Exception as exc:
@@ -131,11 +144,19 @@ class InProcessLSPRBackend(LSPRBackend):
             )
 
     @staticmethod
-    def _invoke_predict_spectrum(engine, intensities, model_mode):
+    def _invoke_predict_spectrum(engine, intensities, model_mode, prediction_model_mode=None):
         try:
-            return engine.predict_spectrum_from_spectrum(intensities, model_mode=model_mode)
+            return engine.predict_spectrum_from_spectrum(
+                intensities,
+                model_mode=model_mode,
+                prediction_model_mode=prediction_model_mode,
+                generator_model_mode=model_mode,
+            )
         except TypeError:
-            return engine.predict_spectrum_from_spectrum(intensities)
+            try:
+                return engine.predict_spectrum_from_spectrum(intensities, model_mode=model_mode)
+            except TypeError:
+                return engine.predict_spectrum_from_spectrum(intensities)
 
     @staticmethod
     def _is_flat_generated(result) -> bool:
@@ -144,10 +165,11 @@ class InProcessLSPRBackend(LSPRBackend):
             return True
         return float(np.ptp(generated)) <= 1e-8
 
-    def _build_comparison_with_generator_fallback(self, engine, intensities, model_mode):
+    def _build_comparison_with_generator_fallback(self, engine, intensities, model_mode, metadata):
+        prediction_model_mode = metadata.get('prediction_model_mode', 'auto')
         first_error = None
         try:
-            result = self._invoke_predict_spectrum(engine, intensities, model_mode)
+            result = self._invoke_predict_spectrum(engine, intensities, model_mode, prediction_model_mode=prediction_model_mode)
             if not self._is_flat_generated(result):
                 return result
         except Exception as exc:
@@ -162,7 +184,12 @@ class InProcessLSPRBackend(LSPRBackend):
             if candidate_mode == model_mode:
                 continue
             try:
-                candidate_result = self._invoke_predict_spectrum(engine, intensities, candidate_mode)
+                candidate_result = self._invoke_predict_spectrum(
+                    engine,
+                    intensities,
+                    candidate_mode,
+                    prediction_model_mode=prediction_model_mode,
+                )
             except Exception:
                 continue
             if not self._is_flat_generated(candidate_result):
