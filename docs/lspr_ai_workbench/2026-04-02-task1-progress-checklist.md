@@ -158,3 +158,14 @@
 - 不可用时自动切到 `subprocess`
 
 而不是继续把环境可用性问题暴露给 GUI 层。
+
+---
+
+## 五、2026-04-03 增量进展
+
+- 任务 2 已启动：`config_manager.py` 已增加 `lspr_*` 默认配置项，`settings_dialog.py` 已增加 `LSPR AI` 设置区块。
+- 任务 3 已启动：已新增 `LSPRAIWorkbench` 外壳、`Single Spectrum` 标签页、`Spectrum Comparison` 标签页，并接入主菜单入口。
+- 当前验证：
+  - `pytest tests/test_menu_bar.py tests/test_lspr_ai_workbench_plan_smoke.py -q`
+  - `pytest tests/test_menu_bar.py tests/test_lspr_ai_workbench_plan_smoke.py tests/test_lspr_ai_service.py -q`
+  - 结果：`11 passed`

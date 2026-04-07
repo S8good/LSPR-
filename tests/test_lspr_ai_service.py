@@ -6,6 +6,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from nanosense.ml.lspr_ai_service import LSPRAIService
 from nanosense.ml.lspr_backend_protocol import (
+    BatchPredictionResponse,
     ComparisonResponse,
     DigitalTwinResponse,
     ErrorResponse,
@@ -60,10 +61,10 @@ class _StubBackend:
         )
 
     def predict_batch(self, request):
-        return {
-            "ok": True,
-            "backend": "stub",
-            "rows": [
+        return BatchPredictionResponse(
+            ok=True,
+            backend="stub",
+            rows=[
                 {
                     "label": "sample_1",
                     "predicted_concentration_ng_ml": 2.5,
@@ -71,7 +72,7 @@ class _StubBackend:
                     "reported_text": "2.5000 ng/ml",
                 }
             ],
-        }
+        )
 
 
 class _ErrorBackend(_StubBackend):
@@ -139,3 +140,36 @@ def test_service_raises_runtime_error_when_backend_returns_error_response():
         assert "model missing" in str(exc)
     else:
         raise AssertionError("expected RuntimeError when backend returns error response")
+
+
+def test_service_compare_models_returns_one_row_per_model_mode():
+    service = LSPRAIService(backend=_StubBackend(), config={"lspr_master_root": "C:/stub"})
+
+    result = service.compare_models(
+        wavelengths=[500.0, 501.0, 502.0],
+        intensities=[0.1, 0.2, 0.3],
+        model_modes=["v1", "v2"],
+    )
+
+    assert len(result["rows"]) == 2
+    assert result["rows"][0]["model_mode"] == "v1"
+    assert result["rows"][1]["model_mode"] == "v2"
+
+
+def test_service_predict_batch_returns_structured_rows():
+    service = LSPRAIService(backend=_StubBackend())
+
+    result = service.predict_batch(
+        items=[
+            {
+                "label": "sample_1",
+                "wavelengths": [500.0, 501.0, 502.0],
+                "intensities": [0.1, 0.2, 0.3],
+            }
+        ],
+        model_mode="auto",
+    )
+
+    assert result["backend"] == "stub"
+    assert result["rows"][0]["label"] == "sample_1"
+    assert result["rows"][0]["predicted_concentration_ng_ml"] == 2.5

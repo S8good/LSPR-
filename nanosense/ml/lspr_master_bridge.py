@@ -85,3 +85,7 @@ class LSPRMasterBridge:
     def create_digital_twin_service(self):
         module = self.import_module("src.core.digital_twin_service")
         return module.DigitalTwinService(base_dir=str(self.master_root))
+
+    def list_available_model_modes(self):
+        engine = self.create_ai_engine()
+        return list(engine.available_model_modes())

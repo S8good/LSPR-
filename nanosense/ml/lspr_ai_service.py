@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .lspr_backend_factory import create_lspr_backend
@@ -14,6 +15,7 @@ from .lspr_backend_protocol import (
     PredictSingleRequest,
     PredictionResponse,
 )
+from .lspr_master_bridge import LSPRMasterBridge
 
 
 @dataclass
@@ -58,27 +60,24 @@ class LSPRAIService:
 
     @staticmethod
     def _raise_if_error(response) -> None:
-        if getattr(response, "ok", False):
+        if getattr(response, 'ok', False):
             return
-        error = getattr(response, "error", None)
+        error = getattr(response, 'error', None)
         if error is not None:
             raise RuntimeError(error.message)
-        raise RuntimeError("LSPR backend request failed")
+        raise RuntimeError('LSPR backend request failed')
 
-    def predict_single_spectrum(
-        self,
-        wavelengths: List[float],
-        intensities: List[float],
-        model_mode: str = "auto",
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> LSPRPredictionResult:
+    def discover_model_modes(self) -> List[str]:
+        root = self.config.get('lspr_master_root')
+        try:
+            bridge = LSPRMasterBridge(Path(root) if root else None)
+            return bridge.list_available_model_modes()
+        except Exception:
+            return ['auto']
+
+    def predict_single_spectrum(self, wavelengths: List[float], intensities: List[float], model_mode: str = 'auto', metadata: Optional[Dict[str, Any]] = None) -> LSPRPredictionResult:
         response: PredictionResponse = self.backend.predict_single(
-            PredictSingleRequest(
-                wavelengths=list(wavelengths),
-                intensities=list(intensities),
-                model_mode=model_mode,
-                metadata=metadata or {},
-            )
+            PredictSingleRequest(wavelengths=list(wavelengths), intensities=list(intensities), model_mode=model_mode, metadata=metadata or {})
         )
         self._raise_if_error(response)
         return LSPRPredictionResult(
@@ -92,20 +91,9 @@ class LSPRAIService:
             model_mode=response.model_mode,
         )
 
-    def build_spectrum_comparison(
-        self,
-        wavelengths: List[float],
-        intensities: List[float],
-        model_mode: str = "auto",
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> LSPRSpectrumComparisonResult:
+    def build_spectrum_comparison(self, wavelengths: List[float], intensities: List[float], model_mode: str = 'auto', metadata: Optional[Dict[str, Any]] = None) -> LSPRSpectrumComparisonResult:
         response: ComparisonResponse = self.backend.build_comparison(
-            BuildComparisonRequest(
-                wavelengths=list(wavelengths),
-                intensities=list(intensities),
-                model_mode=model_mode,
-                metadata=metadata or {},
-            )
+            BuildComparisonRequest(wavelengths=list(wavelengths), intensities=list(intensities), model_mode=model_mode, metadata=metadata or {})
         )
         self._raise_if_error(response)
         return LSPRSpectrumComparisonResult(
@@ -119,14 +107,7 @@ class LSPRAIService:
             model_mode=response.model_mode,
         )
 
-    def build_digital_twin_context(
-        self,
-        concentration_ng_ml: float,
-        experimental_wavelengths: Optional[List[float]] = None,
-        experimental_intensities: Optional[List[float]] = None,
-        model_mode: str = "auto",
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> LSPRDigitalTwinResult:
+    def build_digital_twin_context(self, concentration_ng_ml: float, experimental_wavelengths: Optional[List[float]] = None, experimental_intensities: Optional[List[float]] = None, model_mode: str = 'auto', metadata: Optional[Dict[str, Any]] = None) -> LSPRDigitalTwinResult:
         response: DigitalTwinResponse = self.backend.build_digital_twin(
             BuildDigitalTwinRequest(
                 concentration_ng_ml=float(concentration_ng_ml),
@@ -147,17 +128,24 @@ class LSPRAIService:
             backend=response.backend,
         )
 
-    def predict_batch(
-        self,
-        items: List[Dict[str, Any]],
-        model_mode: str = "auto",
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        response = self.backend.predict_batch(
-            BatchPredictRequest(items=list(items), model_mode=model_mode, metadata=metadata or {})
-        )
+    def compare_models(self, wavelengths: List[float], intensities: List[float], model_modes: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        modes = list(model_modes or self.discover_model_modes())
+        rows = []
+        comparisons = []
+        for mode in modes:
+            prediction = self.predict_single_spectrum(wavelengths, intensities, model_mode=mode, metadata=metadata)
+            comparison = self.build_spectrum_comparison(wavelengths, intensities, model_mode=mode, metadata=metadata)
+            rows.append({
+                'model_mode': mode,
+                'predicted_concentration_ng_ml': prediction.predicted_concentration_ng_ml,
+                'report_mode': prediction.report_mode,
+                'reported_text': prediction.reported_text,
+                'backend': prediction.backend,
+            })
+            comparisons.append(comparison)
+        return {'rows': rows, 'comparisons': comparisons}
+
+    def predict_batch(self, items: List[Dict[str, Any]], model_mode: str = 'auto', metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        response = self.backend.predict_batch(BatchPredictRequest(items=list(items), model_mode=model_mode, metadata=metadata or {}))
         self._raise_if_error(response)
-        return {
-            "rows": list(response.rows),
-            "backend": response.backend,
-        }
+        return {'rows': list(response.rows), 'backend': response.backend}
