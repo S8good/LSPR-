@@ -18,10 +18,9 @@ from PyQt5.QtWidgets import (
 
 
 class LSPRDigitalTwinWidget(QWidget):
-    def __init__(self, get_service: Callable, get_model_mode: Optional[Callable] = None, parent=None):
+    def __init__(self, get_service: Callable, parent=None):
         super().__init__(parent)
         self._get_service = get_service
-        self._get_model_mode = get_model_mode
         self._slider_scale = 1000
         self._experimental_wavelengths: Optional[list] = None
         self._experimental_intensities: Optional[list] = None
@@ -76,7 +75,6 @@ class LSPRDigitalTwinWidget(QWidget):
         self.digital_twin_plot.addLegend()
         self.digital_twin_plot.showGrid(x=True, y=True, alpha=0.3)
         layout.addWidget(self.digital_twin_plot)
-        self._apply_theme_styles()
 
     def set_concentration(self, concentration_ng_ml: float):
         self.concentration_spinbox.setValue(float(concentration_ng_ml))
@@ -104,24 +102,12 @@ class LSPRDigitalTwinWidget(QWidget):
 
     def _generate_digital_twin(self):
         service = self._get_service()
-        model_mode = "auto"
-        if callable(self._get_model_mode):
-            try:
-                selected_mode = self._get_model_mode()
-                if selected_mode:
-                    model_mode = str(selected_mode)
-            except Exception:
-                model_mode = "auto"
-        self._last_result = service.build_digital_twin_context(
-            concentration_ng_ml=self.concentration_spinbox.value(),
-            model_mode=model_mode,
-        )
+        self._last_result = service.build_digital_twin_context(concentration_ng_ml=self.concentration_spinbox.value())
         self._refresh_plot()
 
     def _refresh_plot(self):
         self.digital_twin_plot.clear()
         self.digital_twin_plot.addLegend()
-        self._apply_theme_styles()
         if self._last_result is None:
             self._update_status_text()
             return
@@ -181,19 +167,3 @@ class LSPRDigitalTwinWidget(QWidget):
             return
         exporter = pg.exporters.ImageExporter(self.digital_twin_plot.plotItem)
         exporter.export(file_path)
-
-    def _apply_theme_styles(self):
-        try:
-            from nanosense.utils.config_manager import load_settings
-            theme = str(load_settings().get("theme", "dark")).lower()
-        except Exception:
-            theme = "dark"
-
-        background_color = "#F0F0F0" if theme == "light" else "#1F2735"
-        axis_color = "#000000" if theme == "light" else "#FFFFFF"
-        self.digital_twin_plot.setBackground(background_color)
-        self.digital_twin_plot.showGrid(x=True, y=True, alpha=0.12 if theme == "light" else 0.3)
-        for axis_name in ("left", "bottom"):
-            axis = self.digital_twin_plot.getPlotItem().getAxis(axis_name)
-            axis.setPen(pg.mkPen(axis_color, width=1))
-            axis.setTextPen(pg.mkPen(axis_color, width=1))

@@ -3,7 +3,6 @@ from typing import Dict, List, Optional
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
-import time
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -32,11 +31,7 @@ from .lspr_digital_twin_widget import LSPRDigitalTwinWidget
 from .lspr_model_comparison_widget import LSPRModelComparisonWidget
 from .lspr_result_summary_widget import LSPRResultSummaryWidget
 from .lspr_spectrum_comparison_widget import LSPRSpectrumComparisonWidget
-from ..ml.lspr_ai_service import (
-    LSPRAIService,
-    LSPRPredictionResult,
-    LSPRSpectrumComparisonResult,
-)
+from ..ml.lspr_ai_service import LSPRAIService, LSPRSpectrumComparisonResult
 
 
 class LSPRAIAnalysisWindow(QMainWindow):
@@ -46,12 +41,8 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self._service = None
         if service is not None:
             self._service = service
-        self._services_by_backend_mode: Dict[str, LSPRAIService] = {}
         self.spectra: Dict[str, Dict[str, object]] = {}
         self.current_spectrum_key: Optional[str] = None
-        self.main_peak_marker = None
-        self._last_prediction_result: Optional[LSPRPredictionResult] = None
-        self._last_comparison_result: Optional[LSPRSpectrumComparisonResult] = None
 
         self.setWindowTitle("LSPR AI Analysis Window")
         self.resize(1360, 820)
@@ -64,36 +55,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
         if self._service is None:
             self._service = LSPRAIService(config=self.config)
         return self._service
-
-    def _get_service_for_backend_mode(self, backend_mode: str) -> LSPRAIService:
-        mode = str(backend_mode or "auto").lower()
-        if mode == "auto":
-            return self._get_service()
-        existing = self._services_by_backend_mode.get(mode)
-        if existing is not None:
-            return existing
-        mode_config = dict(self.config)
-        mode_config["backend_mode"] = mode
-        service = LSPRAIService(config=mode_config)
-        self._services_by_backend_mode[mode] = service
-        return service
-
-    def _populate_model_modes(self):
-        self.model_mode_combo.clear()
-        self.model_mode_combo.addItem("Auto", "auto")
-        try:
-            modes = self._get_service().discover_model_modes()
-        except Exception:
-            modes = []
-        for mode in modes:
-            mode_str = str(mode)
-            if mode_str == "auto":
-                continue
-            self.model_mode_combo.addItem(mode_str, mode_str)
-        default_model_mode = str(self.config.get("lspr_default_inference_model", "auto")).lower()
-        index = self.model_mode_combo.findData(default_model_mode)
-        if index >= 0:
-            self.model_mode_combo.setCurrentIndex(index)
 
     def _build_ui(self):
         central = QWidget(self)
@@ -126,9 +87,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.preprocessing_enabled_checkbox = QCheckBox("Enable preprocessing")
         self.baseline_checkbox = QCheckBox("ALS baseline")
         self.smoothing_checkbox = QCheckBox("Smoothing")
-        self.preprocessing_enabled_checkbox.toggled.connect(self._on_preprocessing_controls_changed)
-        self.baseline_checkbox.toggled.connect(self._on_preprocessing_controls_changed)
-        self.smoothing_checkbox.toggled.connect(self._on_preprocessing_controls_changed)
         preprocessing_layout.addWidget(self.preprocessing_enabled_checkbox)
         preprocessing_layout.addWidget(self.baseline_checkbox)
         preprocessing_layout.addWidget(self.smoothing_checkbox)
@@ -141,22 +99,16 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.analysis_target_combo = QComboBox()
         self.analysis_target_combo.currentIndexChanged.connect(self._handle_analysis_target_changed)
         ai_mode_row.addWidget(self.analysis_target_combo)
-        ai_mode_row.addWidget(QLabel("Backend:"))
-        self.backend_mode_combo = QComboBox()
-        self.backend_mode_combo.addItem("Auto", "auto")
-        self.backend_mode_combo.addItem("In-process", "inprocess")
-        self.backend_mode_combo.addItem("Subprocess", "subprocess")
-        ai_mode_row.addWidget(self.backend_mode_combo)
-        ai_mode_row.addWidget(QLabel("Model:"))
+        ai_mode_row.addWidget(QLabel("Model Mode:"))
         self.model_mode_combo = QComboBox()
+        self.model_mode_combo.addItem("Auto", "auto")
+        self.model_mode_combo.addItem("In-process", "inprocess")
+        self.model_mode_combo.addItem("Subprocess", "subprocess")
         ai_mode_row.addWidget(self.model_mode_combo)
         ai_layout.addLayout(ai_mode_row)
         self.run_ai_button = QPushButton("Run AI Prediction")
         self.run_ai_button.clicked.connect(self._run_ai_prediction)
         ai_layout.addWidget(self.run_ai_button)
-        self.archive_ai_button = QPushButton("Archive AI Result")
-        self.archive_ai_button.clicked.connect(self._archive_current_ai_result)
-        ai_layout.addWidget(self.archive_ai_button)
         self.summary_widget = LSPRResultSummaryWidget()
         ai_layout.addWidget(self.summary_widget)
         control_layout.addWidget(ai_group)
@@ -190,13 +142,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.source_label = QLabel("No spectrum loaded.")
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.main_peak_marker = pg.ScatterPlotItem(
-            size=14,
-            symbol="star",
-            pen=pg.mkPen("#FFD60A", width=2),
-            brush=pg.mkBrush("#FFD60A"),
-        )
-        self.plot_widget.addItem(self.main_peak_marker)
         self.export_plot_button = QPushButton("Export Current Plot")
         self.export_plot_button.clicked.connect(self._export_current_plot)
         self.comparison_metrics_row = QWidget(self)
@@ -207,12 +152,10 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.comparison_report_mode_label = QLabel("Mode: N/A")
         self.comparison_scale_label = QLabel("Scale: N/A")
         self.comparison_offset_label = QLabel("Offset: N/A")
-        self.comparison_note_label = QLabel("")
         comparison_metrics_layout.addWidget(self.comparison_concentration_label)
         comparison_metrics_layout.addWidget(self.comparison_report_mode_label)
         comparison_metrics_layout.addWidget(self.comparison_scale_label)
         comparison_metrics_layout.addWidget(self.comparison_offset_label)
-        comparison_metrics_layout.addWidget(self.comparison_note_label)
         comparison_metrics_layout.addStretch(1)
         self.comparison_widget = LSPRSpectrumComparisonWidget()
         analysis_tab_layout.addWidget(self.source_label)
@@ -221,14 +164,9 @@ class LSPRAIAnalysisWindow(QMainWindow):
         analysis_tab_layout.addWidget(self.comparison_metrics_row)
         analysis_tab_layout.addWidget(self.comparison_widget, stretch=2)
 
-        self.digital_twin_tab = LSPRDigitalTwinWidget(
-            self._get_service,
-            get_model_mode=lambda: self.model_mode_combo.currentData() or "auto",
-            parent=self,
-        )
+        self.digital_twin_tab = LSPRDigitalTwinWidget(self._get_service, parent=self)
         self.model_comparison_tab = LSPRModelComparisonWidget(self._get_service, self._get_current_spectrum, parent=self)
         self.batch_prediction_tab = LSPRBatchPredictionWidget(self._get_service, config=self.config, parent=self)
-        self.batch_prediction_tab.row_activated.connect(self._open_batch_prediction_detail)
 
         self.content_tabs.addTab(analysis_tab, "Analysis")
         self.content_tabs.addTab(self.digital_twin_tab, "Digital Twin")
@@ -237,13 +175,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
 
         main_layout.addWidget(control_panel, stretch=1)
         main_layout.addWidget(self.content_tabs, stretch=2)
-        self._apply_theme_styles()
-        self._on_preprocessing_controls_changed()
-        self._populate_model_modes()
-        default_backend_mode = str(self.config.get("lspr_backend_mode", "auto")).lower()
-        backend_index = self.backend_mode_combo.findData(default_backend_mode)
-        if backend_index >= 0:
-            self.backend_mode_combo.setCurrentIndex(backend_index)
 
     def set_initial_data(self, spectra_data):
         spectra_list: List[Dict[str, object]]
@@ -281,22 +212,18 @@ class LSPRAIAnalysisWindow(QMainWindow):
 
     def _add_spectrum(self, wavelengths, intensities, name, metadata=None):
         key = f"{name}___{len(self.spectra)}"
+        item = QListWidgetItem(name)
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked)
+        item.setData(Qt.UserRole, key)
+        self.spectra_list_widget.addItem(item)
+        self.analysis_target_combo.addItem(name, key)
         self.spectra[key] = {
             "name": name,
             "x": np.asarray(wavelengths, dtype=float),
             "y": np.asarray(intensities, dtype=float),
             "metadata": dict(metadata or {}),
         }
-        item = QListWidgetItem(name)
-        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)
-        item.setData(Qt.UserRole, key)
-        self.spectra_list_widget.blockSignals(True)
-        self.analysis_target_combo.blockSignals(True)
-        self.spectra_list_widget.addItem(item)
-        self.analysis_target_combo.addItem(name, key)
-        self.spectra_list_widget.blockSignals(False)
-        self.analysis_target_combo.blockSignals(False)
 
     def _import_spectrum_file(self):
         default_load_path = self.config.get("default_load_path", "")
@@ -344,10 +271,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
 
     def _refresh_source_plot(self):
         self.plot_widget.clear()
-        if self.main_peak_marker is not None:
-            self.plot_widget.addItem(self.main_peak_marker)
-            self.main_peak_marker.clear()
-        self._apply_theme_styles()
         visible_keys = []
         for row in range(self.spectra_list_widget.count()):
             item = self.spectra_list_widget.item(row)
@@ -373,54 +296,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
             self.source_label.setText(f"Source: {source} ({source_file})")
         else:
             self.source_label.setText(f"Source: {source}")
-
-    def _on_preprocessing_controls_changed(self):
-        enabled = self.preprocessing_enabled_checkbox.isChecked()
-        self.baseline_checkbox.setEnabled(enabled)
-        self.smoothing_checkbox.setEnabled(enabled)
-        self._refresh_source_plot()
-        current = self._get_current_spectrum()
-        if current is not None:
-            self.digital_twin_tab.set_experimental_spectrum(
-                current["x"].tolist(),
-                current["y"].tolist(),
-            )
-
-    def _apply_theme_styles(self):
-        try:
-            from nanosense.utils.config_manager import load_settings
-            theme = str(load_settings().get("theme", "dark")).lower()
-        except Exception:
-            theme = "dark"
-
-        background_color = "#F0F0F0" if theme == "light" else "#1F2735"
-        axis_color = "#000000" if theme == "light" else "#FFFFFF"
-        panel_bg = "#FFFFFF" if theme == "light" else "#2D3748"
-        border = "#D1D5DB" if theme == "light" else "#4A5568"
-        text_color = "#111827" if theme == "light" else "#E2E8F0"
-        muted_text = "#4B5563" if theme == "light" else "#A0AEC0"
-        self.plot_widget.setBackground(background_color)
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.12 if theme == "light" else 0.3)
-        for axis_name in ("left", "bottom"):
-            axis = self.plot_widget.getPlotItem().getAxis(axis_name)
-            axis.setPen(pg.mkPen(axis_color, width=1))
-            axis.setTextPen(pg.mkPen(axis_color, width=1))
-
-        self.setStyleSheet(
-            "QGroupBox {{ border: 1px solid {border}; border-radius: 8px; margin-top: 12px; padding-top: 10px; background-color: {panel}; color: {text}; }}"
-            "QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {muted}; }}"
-            "QLabel {{ color: {text}; }}"
-            "QListWidget, QComboBox, QLineEdit, QTableWidget {{ background-color: {panel}; color: {text}; border: 1px solid {border}; }}"
-            "QTabBar::tab {{ color: {text}; }}"
-            .format(border=border, panel=panel_bg, text=text_color, muted=muted_text)
-        )
-
-    def refresh_theme(self):
-        self._apply_theme_styles()
-        self.comparison_widget._apply_theme_styles()
-        self.digital_twin_tab._apply_theme_styles()
-        self.model_comparison_tab.refresh_theme()
-        self.batch_prediction_tab.refresh_theme()
 
     def _get_current_spectrum(self):
         if not self.current_spectrum_key:
@@ -473,7 +348,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
 
     def _apply_comparison_result(self, comparison):
         self.comparison_widget.set_comparison_result(comparison)
-        self._last_comparison_result = comparison
         metrics = dict(getattr(comparison, "metrics", {}) or {})
         concentration = metrics.get("predicted_concentration_ng_ml")
         report_mode = metrics.get("report_mode")
@@ -492,23 +366,11 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.comparison_offset_label.setText(
             "Offset: N/A" if intensity_offset is None else f"Offset: {float(intensity_offset):.4f}"
         )
-        generator_supported = metrics.get("generator_supported")
-        comparison_model_mode = getattr(comparison, "model_mode", None)
-        if comparison_model_mode and self._last_prediction_result and comparison_model_mode != self._last_prediction_result.model_mode:
-            self.comparison_note_label.setText(
-                f"Note: concentration used {self._last_prediction_result.model_mode}; spectrum used {comparison_model_mode}."
-            )
-        elif generator_supported is False:
-            self.comparison_note_label.setText("Note: current model has no spectrum generator; fallback mode or flat curve shown.")
-        else:
-            self.comparison_note_label.setText("")
 
     def _find_main_peak(self):
         if not self.current_spectrum_key:
             QMessageBox.warning(self, "Peak Analysis", "Select or import a spectrum first.")
             return
-        if self.main_peak_marker is not None:
-            self.main_peak_marker.clear()
 
         spectrum = self.spectra[self.current_spectrum_key]
         x_data = np.asarray(spectrum["x"], dtype=float)
@@ -523,16 +385,12 @@ class LSPRAIAnalysisWindow(QMainWindow):
             self.main_peak_wavelength_label.setText("N/A")
             self.main_peak_intensity_label.setText("N/A")
             self.main_peak_fwhm_label.setText("N/A")
-            if self.main_peak_marker is not None:
-                self.main_peak_marker.clear()
             return
 
         peak_intensity = float(y_data[peak_index])
         fwhm_values = calculate_fwhm(x_data, y_data, [peak_index])
         fwhm = float(fwhm_values[0]) if fwhm_values else 0.0
 
-        if self.main_peak_marker is not None:
-            self.main_peak_marker.setData([float(peak_wavelength)], [peak_intensity])
         self.main_peak_wavelength_label.setText(f"{float(peak_wavelength):.4f} nm")
         self.main_peak_intensity_label.setText(f"{peak_intensity:.6f}")
         self.main_peak_fwhm_label.setText(f"{fwhm:.4f} nm")
@@ -548,9 +406,8 @@ class LSPRAIAnalysisWindow(QMainWindow):
         metadata = dict(spectrum.get("metadata", {}))
         metadata["spectrum_name"] = spectrum["name"]
 
-        backend_mode = self.backend_mode_combo.currentData() or "auto"
-        service = self._get_service_for_backend_mode(backend_mode)
-        model_mode = self.model_mode_combo.currentData() or "auto"
+        service = self._get_service()
+        model_mode = self.model_mode_combo.currentData()
 
         try:
             result = service.predict_single_spectrum(
@@ -559,7 +416,6 @@ class LSPRAIAnalysisWindow(QMainWindow):
                 model_mode=model_mode,
                 metadata=metadata,
             )
-            self._last_prediction_result = result
             self.summary_widget.set_result(result)
             self.digital_twin_tab.set_concentration(result.predicted_concentration_ng_ml)
             try:
@@ -573,153 +429,13 @@ class LSPRAIAnalysisWindow(QMainWindow):
                 comparison = LSPRSpectrumComparisonResult(
                     wavelengths=wavelengths,
                     input_spectrum=intensities,
-                    generated_spectrum=[],
-                    aligned_spectrum=[],
+                    generated_spectrum=intensities,
+                    aligned_spectrum=intensities,
                     physical_spectrum=None,
-                    metrics={"generator_supported": False},
+                    metrics={},
                     backend=result.backend,
                     model_mode=result.model_mode,
                 )
             self._apply_comparison_result(comparison)
         except Exception as exc:
             QMessageBox.critical(self, "LSPR AI", str(exc))
-
-    def _open_batch_prediction_detail(self, payload):
-        wavelengths = payload.get("wavelengths") or []
-        intensities = payload.get("intensities") or []
-        if not wavelengths or not intensities:
-            return
-        metadata = {
-            "name": payload.get("label", "Batch Prediction Spectrum"),
-            "source": "batch_prediction",
-            "source_type": "batch_prediction",
-            "label": payload.get("label", ""),
-            "model_mode": payload.get("model_mode", "auto"),
-            "report_mode": payload.get("report_mode"),
-            "reported_text": payload.get("reported_text"),
-        }
-        self.set_input_spectrum(wavelengths, intensities, metadata=metadata)
-        self.content_tabs.setCurrentIndex(0)
-
-    def _archive_current_ai_result(self):
-        if self._last_prediction_result is None or self.current_spectrum_key is None:
-            QMessageBox.warning(self, "LSPR AI", "Run an AI prediction before archiving.")
-            return
-        parent = self.parent()
-        db_manager = getattr(parent, "db_manager", None)
-        if db_manager is None:
-            QMessageBox.warning(self, "LSPR AI", "Database manager is not available.")
-            return
-
-        spectrum = self.spectra[self.current_spectrum_key]
-        metadata = dict(spectrum.get("metadata", {}))
-        experiment_id = metadata.get("experiment_id")
-        if not experiment_id:
-            project_id = db_manager.find_or_create_project("LSPR AI Workbench")
-            experiment_id = db_manager.create_experiment(
-                project_id,
-                metadata.get("name", spectrum["name"]),
-                "lspr_ai_prediction",
-                time.strftime("%Y-%m-%d %H:%M:%S"),
-                notes="Auto-created by LSPR AI Workbench",
-            )
-            metadata["experiment_id"] = experiment_id
-            self.spectra[self.current_spectrum_key]["metadata"] = metadata
-
-        metrics = dict(self._last_prediction_result.metrics)
-        metrics.update(
-            {
-                "predicted_concentration_ng_ml": self._last_prediction_result.predicted_concentration_ng_ml,
-                "report_mode": self._last_prediction_result.report_mode,
-                "reported_text": self._last_prediction_result.reported_text,
-                "uloq_ng_ml": self._last_prediction_result.uloq_ng_ml,
-                "super_quant_bin": self._last_prediction_result.super_quant_bin,
-            }
-        )
-        if self._last_comparison_result is not None:
-            metrics.update({k: v for k, v in self._last_comparison_result.metrics.items() if v is not None})
-
-        input_context = {
-            "model_mode": self._last_prediction_result.model_mode,
-            "backend_mode": self._last_prediction_result.backend,
-            "source_type": metadata.get("source_type", metadata.get("source", "lspr_ai_workbench")),
-            "source_file": metadata.get("source_file"),
-            "label": metadata.get("label", spectrum["name"]),
-            "spectrum": {
-                "wavelengths": np.asarray(spectrum["x"], dtype=float).tolist(),
-                "intensities": np.asarray(spectrum["y"], dtype=float).tolist(),
-                "metadata": metadata,
-            },
-        }
-        if self._last_comparison_result is not None:
-            input_context["comparison"] = {
-                "wavelengths": list(self._last_comparison_result.wavelengths),
-                "input_spectrum": list(self._last_comparison_result.input_spectrum),
-                "generated_spectrum": list(self._last_comparison_result.generated_spectrum),
-                "aligned_spectrum": list(self._last_comparison_result.aligned_spectrum),
-                "physical_spectrum": list(self._last_comparison_result.physical_spectrum)
-                if self._last_comparison_result.physical_spectrum is not None else None,
-                "metrics": dict(self._last_comparison_result.metrics),
-            }
-        digital_twin_result = getattr(self.digital_twin_tab, "_last_result", None)
-        if digital_twin_result is not None:
-            input_context["digital_twin"] = {
-                "concentration_ng_ml": digital_twin_result.concentration_ng_ml,
-                "wavelengths": list(digital_twin_result.wavelengths),
-                "baseline_spectrum": list(digital_twin_result.baseline_spectrum),
-                "physical_spectrum": list(digital_twin_result.physical_spectrum),
-                "ai_spectrum": list(digital_twin_result.ai_spectrum) if digital_twin_result.ai_spectrum is not None else None,
-                "metrics": dict(digital_twin_result.metrics),
-            }
-
-        analysis_run_id = db_manager.save_lspr_ai_prediction(
-            experiment_id=experiment_id,
-            metrics=metrics,
-            input_context=input_context,
-            algorithm_version=self._last_prediction_result.model_mode,
-        )
-        if analysis_run_id is None:
-            QMessageBox.critical(self, "LSPR AI", "Failed to archive AI result.")
-            return
-        QMessageBox.information(self, "LSPR AI", f"Archived AI result as run {analysis_run_id}.")
-
-    def apply_archived_run_detail(self, detail):
-        input_context = dict(detail.get("input_context", {}) or {})
-        spectrum = dict(input_context.get("spectrum", {}) or {})
-        wavelengths = spectrum.get("wavelengths") or []
-        intensities = spectrum.get("intensities") or []
-        if wavelengths and intensities:
-            metadata = dict(spectrum.get("metadata", {}) or {})
-            metadata.setdefault("analysis_run_id", detail.get("analysis_run_id"))
-            self.set_input_spectrum(wavelengths, intensities, metadata=metadata)
-
-        metrics_map = dict(detail.get("metrics", {}) or {})
-        concentration_raw = metrics_map.get("predicted_concentration_ng_ml", {}).get("value")
-        if concentration_raw is not None:
-            prediction = LSPRPredictionResult(
-                predicted_concentration_ng_ml=float(concentration_raw),
-                report_mode=str(metrics_map.get("report_mode", {}).get("value", "")),
-                reported_text=str(metrics_map.get("reported_text", {}).get("value", "")),
-                uloq_ng_ml=float(metrics_map["uloq_ng_ml"]["value"]) if metrics_map.get("uloq_ng_ml", {}).get("value") not in (None, "") else None,
-                super_quant_bin=metrics_map.get("super_quant_bin", {}).get("value"),
-                metrics={key: value.get("value") for key, value in metrics_map.items()},
-                backend=str(input_context.get("backend_mode", "archived")),
-                model_mode=str(input_context.get("model_mode", "archived")),
-            )
-            self._last_prediction_result = prediction
-            self.summary_widget.set_result(prediction)
-
-        comparison_data = dict(input_context.get("comparison", {}) or {})
-        if comparison_data:
-            comparison = LSPRSpectrumComparisonResult(
-                wavelengths=list(comparison_data.get("wavelengths", [])),
-                input_spectrum=list(comparison_data.get("input_spectrum", [])),
-                generated_spectrum=list(comparison_data.get("generated_spectrum", [])),
-                aligned_spectrum=list(comparison_data.get("aligned_spectrum", [])),
-                physical_spectrum=list(comparison_data.get("physical_spectrum", []))
-                if comparison_data.get("physical_spectrum") is not None else None,
-                metrics=dict(comparison_data.get("metrics", {})),
-                backend=str(input_context.get("backend_mode", "archived")),
-                model_mode=str(input_context.get("model_mode", "archived")),
-            )
-            self._apply_comparison_result(comparison)

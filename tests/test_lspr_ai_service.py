@@ -91,24 +91,6 @@ class _ErrorBackend(_StubBackend):
         )
 
 
-class _PartialErrorBackend(_StubBackend):
-    def predict_single(self, request):
-        if request.model_mode == "bad_mode":
-            return PredictionResponse(
-                ok=False,
-                backend="stub",
-                model_mode=request.model_mode,
-                predicted_concentration_ng_ml=None,
-                report_mode=None,
-                reported_text=None,
-                uloq_ng_ml=None,
-                super_quant_bin=None,
-                metrics={},
-                error=ErrorResponse(code="prediction_failed", message="bad mode"),
-            )
-        return super().predict_single(request)
-
-
 def test_service_predict_single_returns_expected_summary_fields():
     service = LSPRAIService(backend=_StubBackend())
 
@@ -172,8 +154,6 @@ def test_service_compare_models_returns_one_row_per_model_mode():
     assert len(result["rows"]) == 2
     assert result["rows"][0]["model_mode"] == "v1"
     assert result["rows"][1]["model_mode"] == "v2"
-    assert result["available_model_modes"] == ["v1", "v2"]
-    assert result["recommended_model_mode"] == "auto"
 
 
 def test_service_predict_batch_returns_structured_rows():
@@ -193,31 +173,3 @@ def test_service_predict_batch_returns_structured_rows():
     assert result["backend"] == "stub"
     assert result["rows"][0]["label"] == "sample_1"
     assert result["rows"][0]["predicted_concentration_ng_ml"] == 2.5
-
-
-def test_compare_models_continues_when_one_mode_fails():
-    service = LSPRAIService(backend=_PartialErrorBackend(), config={"lspr_master_root": "C:/stub"})
-
-    result = service.compare_models(
-        wavelengths=[500.0, 501.0, 502.0],
-        intensities=[0.1, 0.2, 0.3],
-        model_modes=["v1", "bad_mode", "v2"],
-    )
-
-    assert len(result["rows"]) == 3
-    assert result["rows"][1]["model_mode"] == "bad_mode"
-    assert result["rows"][1]["report_mode"] == "error"
-    assert "bad mode" in result["rows"][1]["reported_text"]
-
-
-def test_service_compare_models_uses_discovered_modes_when_not_provided(monkeypatch):
-    service = LSPRAIService(backend=_StubBackend(), config={"lspr_master_root": "C:/stub"})
-    monkeypatch.setattr(service, "discover_model_modes", lambda: ["v2", "v2_fusion"])
-
-    result = service.compare_models(
-        wavelengths=[500.0, 501.0, 502.0],
-        intensities=[0.1, 0.2, 0.3],
-    )
-
-    assert [row["model_mode"] for row in result["rows"]] == ["v2", "v2_fusion"]
-    assert result["available_model_modes"] == ["v2", "v2_fusion"]

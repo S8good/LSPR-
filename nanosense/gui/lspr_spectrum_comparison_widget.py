@@ -1,7 +1,5 @@
 import pyqtgraph as pg
 import pyqtgraph.exporters
-import numpy as np
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 
@@ -21,9 +19,6 @@ class LSPRSpectrumComparisonWidget(QWidget):
         self.show_input_checkbox = QCheckBox("Input")
         self.show_generated_checkbox = QCheckBox("Generated")
         self.show_aligned_checkbox = QCheckBox("Aligned")
-        self.show_input_checkbox.setToolTip("Measured/preprocessed input spectrum.")
-        self.show_generated_checkbox.setToolTip("AI-generated spectrum before scale/offset alignment.")
-        self.show_aligned_checkbox.setToolTip("AI-generated spectrum after alignment to the input intensity range.")
         for checkbox in (
             self.show_input_checkbox,
             self.show_generated_checkbox,
@@ -45,66 +40,27 @@ class LSPRSpectrumComparisonWidget(QWidget):
         layout.addWidget(self.status_label)
         layout.addLayout(controls_row)
         layout.addWidget(self.plot_widget)
-        self._apply_theme_styles()
-
-    @staticmethod
-    def _safe_float_array(values):
-        if values is None:
-            return []
-        try:
-            return list(np.asarray(values, dtype=float))
-        except Exception:
-            return []
-
-    def _apply_theme_styles(self):
-        try:
-            from nanosense.utils.config_manager import load_settings
-            theme = str(load_settings().get("theme", "dark")).lower()
-        except Exception:
-            theme = "dark"
-
-        background = "#F0F0F0" if theme == "light" else "#1F2735"
-        axis_color = "#000000" if theme == "light" else "#FFFFFF"
-        text_color = "#000000" if theme == "light" else "#E2E8F0"
-        self.plot_widget.setBackground(background)
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.12 if theme == "light" else 0.3)
-        for axis_name in ("left", "bottom"):
-            axis = self.plot_widget.getPlotItem().getAxis(axis_name)
-            axis.setPen(pg.mkPen(axis_color, width=1))
-            axis.setTextPen(pg.mkPen(axis_color, width=1))
-        legend = self.plot_widget.getPlotItem().legend
-        if legend:
-            for item in legend.items:
-                label = item[1]
-                label.setText(label.text, color=text_color)
 
     def set_comparison_result(self, result):
         self._current_result = result
         self.plot_widget.clear()
         self.plot_widget.addLegend()
-        self._apply_theme_styles()
-
-        wavelengths = self._safe_float_array(getattr(result, "wavelengths", None))
-        input_spectrum = self._safe_float_array(getattr(result, "input_spectrum", None))
-        generated_spectrum = self._safe_float_array(getattr(result, "generated_spectrum", None))
-        aligned_spectrum = self._safe_float_array(getattr(result, "aligned_spectrum", None))
-
         self._input_curve = self.plot_widget.plot(
-            wavelengths,
-            input_spectrum,
+            result.wavelengths,
+            result.input_spectrum,
             pen=pg.mkPen("#1f77b4", width=2),
             name="Input",
         )
         self._generated_curve = self.plot_widget.plot(
-            wavelengths,
-            generated_spectrum,
-            pen=pg.mkPen("#d62728", width=2, style=Qt.DashLine),
+            result.wavelengths,
+            result.generated_spectrum,
+            pen=pg.mkPen("#d62728", width=2),
             name="Generated",
         )
         self._aligned_curve = self.plot_widget.plot(
-            wavelengths,
-            aligned_spectrum,
-            pen=pg.mkPen("#2ca02c", width=2, style=Qt.DotLine),
+            result.wavelengths,
+            result.aligned_spectrum,
+            pen=pg.mkPen("#2ca02c", width=2),
             name="Aligned",
         )
         self._refresh_curve_visibility()
@@ -131,16 +87,15 @@ class LSPRSpectrumComparisonWidget(QWidget):
             self.status_label.setText("No comparison curves are visible.")
             return
 
-        hint = " Input=measured, Generated=AI raw output, Aligned=scale/offset aligned output."
         if len(visible_labels) == 1:
-            self.status_label.setText(f"Showing {visible_labels[0]} spectrum only.{hint}")
+            self.status_label.setText(f"Showing {visible_labels[0]} spectrum only.")
             return
 
         if len(visible_labels) == 2:
-            self.status_label.setText(f"Showing {visible_labels[0]} and {visible_labels[1]} spectra.{hint}")
+            self.status_label.setText(f"Showing {visible_labels[0]} and {visible_labels[1]} spectra.")
             return
 
-        self.status_label.setText(f"Showing input, generated, and aligned spectra.{hint}")
+        self.status_label.setText("Showing input, generated, and aligned spectra.")
 
     def _export_current_plot(self):
         file_path, _ = QFileDialog.getSaveFileName(

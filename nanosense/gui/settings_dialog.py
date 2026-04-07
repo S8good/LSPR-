@@ -101,36 +101,12 @@ class SettingsDialog(QDialog):
         self.lspr_master_root_label = QLabel()
         lspr_layout.addRow(self.lspr_master_root_label, lspr_root_layout)
 
-        self.lspr_backend_mode_combo = QComboBox()
-        self.lspr_backend_mode_combo.addItem("Auto", "auto")
-        self.lspr_backend_mode_combo.addItem("In-process", "inprocess")
-        self.lspr_backend_mode_combo.addItem("Subprocess", "subprocess")
-        self.lspr_backend_mode_label = QLabel()
-        lspr_layout.addRow(self.lspr_backend_mode_label, self.lspr_backend_mode_combo)
-
-        self.lspr_subprocess_python_edit = QLineEdit()
-        self.lspr_subprocess_python_browse_btn = QPushButton()
-        subprocess_python_layout = QHBoxLayout()
-        subprocess_python_layout.addWidget(self.lspr_subprocess_python_edit)
-        subprocess_python_layout.addWidget(self.lspr_subprocess_python_browse_btn)
-        self.lspr_subprocess_python_label = QLabel()
-        lspr_layout.addRow(self.lspr_subprocess_python_label, subprocess_python_layout)
-
-        self.lspr_subprocess_timeout_seconds_spinbox = QDoubleSpinBox()
-        self.lspr_subprocess_timeout_seconds_spinbox.setRange(1.0, 600.0)
-        self.lspr_subprocess_timeout_seconds_spinbox.setDecimals(0)
-        self.lspr_subprocess_timeout_seconds_spinbox.setSingleStep(1.0)
-        self.lspr_subprocess_timeout_seconds_spinbox.setSuffix(" s")
-        self.lspr_subprocess_timeout_seconds_label = QLabel()
-        lspr_layout.addRow(
-            self.lspr_subprocess_timeout_seconds_label,
-            self.lspr_subprocess_timeout_seconds_spinbox,
-        )
-
-        self.lspr_default_inference_model_combo = QComboBox()
-        self.lspr_default_inference_model_combo.addItem("Auto", "auto")
-        self.lspr_default_inference_model_label = QLabel()
-        lspr_layout.addRow(self.lspr_default_inference_model_label, self.lspr_default_inference_model_combo)
+        self.lspr_default_model_mode_combo = QComboBox()
+        self.lspr_default_model_mode_combo.addItem("Auto", "auto")
+        self.lspr_default_model_mode_combo.addItem("In-process", "inprocess")
+        self.lspr_default_model_mode_combo.addItem("Subprocess", "subprocess")
+        self.lspr_default_model_mode_label = QLabel()
+        lspr_layout.addRow(self.lspr_default_model_mode_label, self.lspr_default_model_mode_combo)
 
         self.lspr_default_artifact_dir_edit = QLineEdit()
         self.lspr_default_artifact_dir_browse_btn = QPushButton()
@@ -170,9 +146,6 @@ class SettingsDialog(QDialog):
         self.db_path_browse_btn.clicked.connect(self._browse_db_file)
         self.init_db_button.clicked.connect(self._initialize_db)
         self.lspr_master_root_browse_btn.clicked.connect(lambda: self._browse_folder(self.lspr_master_root_edit))
-        self.lspr_subprocess_python_browse_btn.clicked.connect(
-            lambda: self._browse_python_executable(self.lspr_subprocess_python_edit)
-        )
         self.lspr_default_artifact_dir_browse_btn.clicked.connect(
             lambda: self._browse_folder(self.lspr_default_artifact_dir_edit)
         )
@@ -211,15 +184,11 @@ class SettingsDialog(QDialog):
 
         self.lspr_group.setTitle(self.tr("LSPR AI"))
         self.lspr_master_root_label.setText(self.tr("LSPR Master Root:"))
-        self.lspr_backend_mode_label.setText(self.tr("Default Backend Mode:"))
-        self.lspr_subprocess_python_label.setText(self.tr("Subprocess Python:"))
-        self.lspr_subprocess_timeout_seconds_label.setText(self.tr("Subprocess Timeout:"))
-        self.lspr_default_inference_model_label.setText(self.tr("Default Model:"))
+        self.lspr_default_model_mode_label.setText(self.tr("Default Backend Mode:"))
         self.lspr_default_artifact_dir_label.setText(self.tr("Artifact Directory:"))
         self.lspr_batch_export_dir_label.setText(self.tr("Batch Export Directory:"))
         self.lspr_enable_digital_twin_overlay_label.setText(self.tr("Enable Digital Twin Overlay:"))
         self.lspr_master_root_browse_btn.setText(browse_text)
-        self.lspr_subprocess_python_browse_btn.setText(browse_text)
         self.lspr_default_artifact_dir_browse_btn.setText(browse_text)
         self.lspr_batch_export_dir_browse_btn.setText(browse_text)
 
@@ -240,16 +209,6 @@ class SettingsDialog(QDialog):
         )
         if path:
             self.db_path_edit.setText(path)
-
-    def _browse_python_executable(self, line_edit):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            self.tr("Select Python Executable"),
-            line_edit.text(),
-            self.tr("Python Executable (python.exe);;Executable Files (*.exe);;All Files (*)"),
-        )
-        if path:
-            line_edit.setText(path)
 
     def _initialize_db(self):
         db_path = self.db_path_edit.text()
@@ -285,22 +244,10 @@ class SettingsDialog(QDialog):
         self.db_path_edit.setText(self.settings.get("database_path", default_db_path))
 
         self.lspr_master_root_edit.setText(self.settings.get("lspr_master_root", ""))
-        backend_mode = self.settings.get("lspr_backend_mode", "auto")
-        mode_index = self.lspr_backend_mode_combo.findData(backend_mode)
+        model_mode = self.settings.get("lspr_default_model_mode", "auto")
+        mode_index = self.lspr_default_model_mode_combo.findData(model_mode)
         if mode_index >= 0:
-            self.lspr_backend_mode_combo.setCurrentIndex(mode_index)
-        self.lspr_subprocess_python_edit.setText(self.settings.get("lspr_subprocess_python", ""))
-        self.lspr_subprocess_timeout_seconds_spinbox.setValue(
-            float(self.settings.get("lspr_subprocess_timeout_seconds", 20))
-        )
-        self.lspr_default_inference_model_combo.clear()
-        self.lspr_default_inference_model_combo.addItem("Auto", "auto")
-        configured_model = self.settings.get("lspr_default_inference_model", "auto")
-        if configured_model not in ("", None, "auto"):
-            self.lspr_default_inference_model_combo.addItem(str(configured_model), str(configured_model))
-        model_index = self.lspr_default_inference_model_combo.findData(configured_model)
-        if model_index >= 0:
-            self.lspr_default_inference_model_combo.setCurrentIndex(model_index)
+            self.lspr_default_model_mode_combo.setCurrentIndex(mode_index)
         self.lspr_default_artifact_dir_edit.setText(self.settings.get("lspr_default_artifact_dir", ""))
         self.lspr_batch_export_dir_edit.setText(self.settings.get("lspr_batch_export_dir", ""))
         self.lspr_enable_digital_twin_overlay_checkbox.setChecked(
@@ -315,12 +262,7 @@ class SettingsDialog(QDialog):
         self.settings["theme"] = self.theme_combo.currentData()
         self.settings["database_path"] = self.db_path_edit.text()
         self.settings["lspr_master_root"] = self.lspr_master_root_edit.text()
-        self.settings["lspr_backend_mode"] = self.lspr_backend_mode_combo.currentData()
-        self.settings["lspr_subprocess_python"] = self.lspr_subprocess_python_edit.text()
-        self.settings["lspr_subprocess_timeout_seconds"] = int(
-            self.lspr_subprocess_timeout_seconds_spinbox.value()
-        )
-        self.settings["lspr_default_inference_model"] = self.lspr_default_inference_model_combo.currentData()
+        self.settings["lspr_default_model_mode"] = self.lspr_default_model_mode_combo.currentData()
         self.settings["lspr_default_artifact_dir"] = self.lspr_default_artifact_dir_edit.text()
         self.settings["lspr_batch_export_dir"] = self.lspr_batch_export_dir_edit.text()
         self.settings["lspr_enable_digital_twin_overlay"] = (

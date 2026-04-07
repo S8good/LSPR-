@@ -80,23 +80,6 @@ def test_subprocess_backend_health_check_returns_structured_response():
     assert result.backend == "subprocess"
 
 
-def test_subprocess_backend_resolves_runner_path_from_workspace_fallback():
-    backend = SubprocessLSPRBackend(config={})
-    runner_path = backend._resolve_runner_path()
-
-    assert runner_path is not None
-    assert str(runner_path).replace("\\", "/").endswith("/DeepLearning/LSPR_Spectra_Master/scripts/lspr_bridge_runner.py")
-
-
-def test_subprocess_backend_parses_json_with_noisy_stdout():
-    text = "warmup log line\n{\"ok\": true, \"backend\": \"subprocess\"}\n"
-    parsed = SubprocessLSPRBackend._parse_runner_json(text)
-
-    assert parsed is not None
-    assert parsed["ok"] is True
-    assert parsed["backend"] == "subprocess"
-
-
 def test_subprocess_backend_prepends_conda_dll_paths():
     backend = SubprocessLSPRBackend(
         config={"lspr_subprocess_python": r"C:/ProgramData/anaconda3/envs/py39/python.exe"}
@@ -328,55 +311,3 @@ def test_subprocess_backend_predict_batch_maps_runner_response(monkeypatch):
     assert result.ok is True
     assert result.rows[0]["label"] == "sample_1"
     assert result.rows[0]["predicted_concentration_ng_ml"] == 2.5
-
-
-def test_inprocess_build_comparison_prefers_mode_with_generator_when_requested_mode_is_flat(monkeypatch):
-    backend = InProcessLSPRBackend(config={})
-
-    class StubEngine:
-        def available_model_modes(self):
-            return ["v2", "v2_cycle"]
-
-        def predict_spectrum_from_spectrum(self, intensities, model_mode="auto"):
-            assert intensities == [0.1, 0.2, 0.3]
-            if model_mode == "v2":
-                return {
-                    "model_mode": "v2",
-                    "wavelengths": [500.0, 501.0, 502.0],
-                    "input_resampled": [0.1, 0.2, 0.3],
-                    "pred_spectrum_raw": [0.0, 0.0, 0.0],
-                    "pred_spectrum": [0.01, 0.01, 0.01],
-                    "pred_concentration": 1.23,
-                    "intensity_scale": 1.0,
-                    "intensity_offset": 0.01,
-                }
-            return {
-                "model_mode": "v2_cycle",
-                "wavelengths": [500.0, 501.0, 502.0],
-                "input_resampled": [0.1, 0.2, 0.3],
-                "pred_spectrum_raw": [0.2, 0.25, 0.3],
-                "pred_spectrum": [0.18, 0.23, 0.28],
-                "pred_concentration": 1.23,
-                "intensity_scale": 0.9,
-                "intensity_offset": -0.01,
-            }
-
-    class StubBridge:
-        def create_ai_engine(self):
-            return StubEngine()
-
-    monkeypatch.setattr(backend, "_get_bridge", lambda: StubBridge())
-
-    result = backend.build_comparison(
-        BuildComparisonRequest(
-            wavelengths=[500.0, 501.0, 502.0],
-            intensities=[0.1, 0.2, 0.3],
-            model_mode="v2",
-            metadata={},
-        )
-    )
-
-    assert result.ok is True
-    assert result.model_mode == "v2_cycle"
-    assert result.generated_spectrum == [0.2, 0.25, 0.3]
-    assert result.metrics["generator_supported"] is True

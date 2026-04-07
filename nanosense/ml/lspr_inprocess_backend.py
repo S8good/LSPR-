@@ -89,13 +89,10 @@ class InProcessLSPRBackend(LSPRBackend):
     def build_comparison(self, request: BuildComparisonRequest) -> ComparisonResponse:
         try:
             engine = self._get_bridge().create_ai_engine()
-            result = self._build_comparison_with_generator_fallback(
-                engine=engine,
-                intensities=list(request.intensities),
-                model_mode=request.model_mode,
-            )
-            raw_spectrum = np.asarray(result.get('pred_spectrum_raw', []), dtype=float).reshape(-1)
-            generator_supported = bool(raw_spectrum.size > 1 and np.ptp(raw_spectrum) > 1e-8)
+            try:
+                result = engine.predict_spectrum_from_spectrum(list(request.intensities), model_mode=request.model_mode)
+            except TypeError:
+                result = engine.predict_spectrum_from_spectrum(list(request.intensities))
             return ComparisonResponse(
                 ok=True,
                 backend='inprocess',
@@ -113,7 +110,6 @@ class InProcessLSPRBackend(LSPRBackend):
                     'super_quant_bin': result.get('super_quant_bin'),
                     'intensity_scale': float(result.get('intensity_scale', 1.0)),
                     'intensity_offset': float(result.get('intensity_offset', 0.0)),
-                    'generator_supported': generator_supported,
                 },
             )
         except Exception as exc:
@@ -129,52 +125,6 @@ class InProcessLSPRBackend(LSPRBackend):
                 metrics={},
                 error=ErrorResponse(code='build_comparison_failed', message=str(exc)),
             )
-
-    @staticmethod
-    def _invoke_predict_spectrum(engine, intensities, model_mode):
-        try:
-            return engine.predict_spectrum_from_spectrum(intensities, model_mode=model_mode)
-        except TypeError:
-            return engine.predict_spectrum_from_spectrum(intensities)
-
-    @staticmethod
-    def _is_flat_generated(result) -> bool:
-        generated = np.asarray(result.get('pred_spectrum_raw', []), dtype=float).reshape(-1)
-        if generated.size < 2:
-            return True
-        return float(np.ptp(generated)) <= 1e-8
-
-    def _build_comparison_with_generator_fallback(self, engine, intensities, model_mode):
-        first_error = None
-        try:
-            result = self._invoke_predict_spectrum(engine, intensities, model_mode)
-            if not self._is_flat_generated(result):
-                return result
-        except Exception as exc:
-            first_error = exc
-            result = None
-
-        try:
-            available_modes = list(engine.available_model_modes())
-        except Exception:
-            available_modes = []
-        for candidate_mode in available_modes:
-            if candidate_mode == model_mode:
-                continue
-            try:
-                candidate_result = self._invoke_predict_spectrum(engine, intensities, candidate_mode)
-            except Exception:
-                continue
-            if not self._is_flat_generated(candidate_result):
-                return candidate_result
-            if result is None:
-                result = candidate_result
-
-        if result is not None:
-            return result
-        if first_error is not None:
-            raise first_error
-        raise RuntimeError("no available model mode could build spectrum comparison")
 
     def build_digital_twin(self, request: BuildDigitalTwinRequest) -> DigitalTwinResponse:
         try:

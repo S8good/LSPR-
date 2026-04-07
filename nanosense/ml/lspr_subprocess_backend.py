@@ -32,27 +32,10 @@ class SubprocessLSPRBackend(LSPRBackend):
         explicit = self.config.get('lspr_runner_path')
         if explicit:
             return Path(explicit).expanduser().resolve()
-
-        candidate_roots = []
         master_root = self.config.get('lspr_master_root')
-        if master_root:
-            candidate_roots.append(Path(master_root).expanduser().resolve())
-
-        env_root = os.environ.get('LSPR_MASTER_ROOT')
-        if env_root:
-            candidate_roots.append(Path(env_root).expanduser().resolve())
-
-        workspace_root = Path(__file__).resolve().parents[3]
-        candidate_roots.append(workspace_root / 'DeepLearning' / 'LSPR_Spectra_Master')
-
-        for root in candidate_roots:
-            candidate = root / 'scripts' / 'lspr_bridge_runner.py'
-            if candidate.exists():
-                return candidate
-
-        if candidate_roots:
-            return candidate_roots[0] / 'scripts' / 'lspr_bridge_runner.py'
-        return None
+        if not master_root:
+            return None
+        return Path(master_root).expanduser().resolve() / 'scripts' / 'lspr_bridge_runner.py'
 
     def _invoke_runner(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         runner_path = self._resolve_runner_path()
@@ -70,7 +53,6 @@ class SubprocessLSPRBackend(LSPRBackend):
             capture_output=True,
             text=True,
             encoding='utf-8',
-            errors='replace',
             timeout=self.timeout_seconds,
             check=False,
             env=env,
@@ -87,36 +69,15 @@ class SubprocessLSPRBackend(LSPRBackend):
                 },
                 'error': {'code': 'runner_failed', 'message': proc.stderr.strip() or 'subprocess execution failed'},
             }
-        parsed = self._parse_runner_json(proc.stdout or '')
-        if parsed is not None:
-            return parsed
-        return {
-            'ok': False,
-            'backend': 'subprocess',
-            'details': {'command': command, 'runner_path': str(runner_path), 'stdout': proc.stdout},
-            'error': {'code': 'invalid_json', 'message': 'subprocess returned invalid JSON'},
-        }
-
-    @staticmethod
-    def _parse_runner_json(stdout_text: str) -> Optional[Dict[str, Any]]:
-        text = (stdout_text or '').strip()
-        if not text:
-            return {}
         try:
-            return json.loads(text)
+            return json.loads(proc.stdout or '{}')
         except json.JSONDecodeError:
-            pass
-
-        # Some environments may prepend/append logs to stdout; try to recover the last JSON object.
-        start = text.find('{')
-        end = text.rfind('}')
-        if start == -1 or end == -1 or end <= start:
-            return None
-        candidate = text[start:end + 1]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            return None
+            return {
+                'ok': False,
+                'backend': 'subprocess',
+                'details': {'command': command, 'runner_path': str(runner_path), 'stdout': proc.stdout},
+                'error': {'code': 'invalid_json', 'message': 'subprocess returned invalid JSON'},
+            }
 
     def _build_subprocess_env(self) -> Dict[str, str]:
         env = os.environ.copy()

@@ -133,38 +133,17 @@ class LSPRAIService:
         rows = []
         comparisons = []
         for mode in modes:
-            try:
-                prediction = self.predict_single_spectrum(wavelengths, intensities, model_mode=mode, metadata=metadata)
-            except Exception as exc:
-                rows.append({
-                    'model_mode': mode,
-                    'predicted_concentration_ng_ml': None,
-                    'report_mode': 'error',
-                    'reported_text': str(exc),
-                    'backend': getattr(self.backend, '__class__', type(self.backend)).__name__,
-                    'error': str(exc),
-                })
-                continue
-
-            row = {
+            prediction = self.predict_single_spectrum(wavelengths, intensities, model_mode=mode, metadata=metadata)
+            comparison = self.build_spectrum_comparison(wavelengths, intensities, model_mode=mode, metadata=metadata)
+            rows.append({
                 'model_mode': mode,
                 'predicted_concentration_ng_ml': prediction.predicted_concentration_ng_ml,
                 'report_mode': prediction.report_mode,
                 'reported_text': prediction.reported_text,
                 'backend': prediction.backend,
-            }
-            try:
-                comparison = self.build_spectrum_comparison(wavelengths, intensities, model_mode=mode, metadata=metadata)
-                comparisons.append(comparison)
-            except Exception as exc:
-                row['comparison_error'] = str(exc)
-            rows.append(row)
-        return {
-            'rows': rows,
-            'comparisons': comparisons,
-            'available_model_modes': modes,
-            'recommended_model_mode': 'auto',
-        }
+            })
+            comparisons.append(comparison)
+        return {'rows': rows, 'comparisons': comparisons}
 
     def predict_batch(self, items: List[Dict[str, Any]], model_mode: str = 'auto', metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         response = self.backend.predict_batch(BatchPredictRequest(items=list(items), model_mode=model_mode, metadata=metadata or {}))

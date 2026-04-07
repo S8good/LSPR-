@@ -1,21 +1,16 @@
-import csv
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QFileDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QPushButton
 
 from nanosense.utils.file_io import load_spectra_from_path
 
 
 class LSPRBatchPredictionWidget(QWidget):
-    row_activated = pyqtSignal(dict)
-
     def __init__(self, get_service: Callable, config: Optional[dict] = None, parent=None):
         super().__init__(parent)
         self._get_service = get_service
         self.config = config or {}
         self._items: List[dict] = []
-        self._last_rows: List[dict] = []
 
         layout = QVBoxLayout(self)
         self.load_folder_button = QPushButton("Load Folder...")
@@ -30,15 +25,9 @@ class LSPRBatchPredictionWidget(QWidget):
         self.run_button.clicked.connect(self._run_batch_prediction)
         layout.addWidget(self.run_button)
 
-        self.export_csv_button = QPushButton("Export CSV...")
-        self.export_csv_button.clicked.connect(self._export_csv)
-        layout.addWidget(self.export_csv_button)
-
         self.results_table = QTableWidget(0, 5, self)
         self.results_table.setHorizontalHeaderLabels(["Label", "Model", "Concentration", "Mode", "Reported"])
-        self.results_table.cellDoubleClicked.connect(self._emit_selected_row)
         layout.addWidget(self.results_table)
-        self.refresh_theme()
 
     def _load_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", self.config.get("default_load_path", ""))
@@ -63,7 +52,6 @@ class LSPRBatchPredictionWidget(QWidget):
         service = self._get_service()
         result = service.predict_batch(items=self._items, model_mode="auto")
         rows = result["rows"]
-        self._last_rows = list(rows)
         self.results_table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             self.results_table.setItem(row_index, 0, QTableWidgetItem(str(row.get("label", ""))))
@@ -71,53 +59,3 @@ class LSPRBatchPredictionWidget(QWidget):
             self.results_table.setItem(row_index, 2, QTableWidgetItem(f"{float(row.get('predicted_concentration_ng_ml', 0.0)):.4f}"))
             self.results_table.setItem(row_index, 3, QTableWidgetItem(str(row.get("report_mode", ""))))
             self.results_table.setItem(row_index, 4, QTableWidgetItem(str(row.get("reported_text", ""))))
-
-    def _export_csv(self):
-        if not self._last_rows:
-            return
-        default_dir = self.config.get("lspr_batch_export_dir", "") or self.config.get("default_save_path", "")
-        file_path, _ = QFileDialog.getSaveFileName(self, "Export Batch Results", default_dir, "CSV Files (*.csv)")
-        if not file_path:
-            return
-        with open(file_path, "w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["label", "model_mode", "predicted_concentration_ng_ml", "report_mode", "reported_text"],
-            )
-            writer.writeheader()
-            for row in self._last_rows:
-                writer.writerow(
-                    {
-                        "label": row.get("label", ""),
-                        "model_mode": row.get("model_mode", ""),
-                        "predicted_concentration_ng_ml": row.get("predicted_concentration_ng_ml", ""),
-                        "report_mode": row.get("report_mode", ""),
-                        "reported_text": row.get("reported_text", ""),
-                    }
-                )
-
-    def _emit_selected_row(self, row_index, _column_index):
-        if 0 <= row_index < len(self._items):
-            payload = dict(self._items[row_index])
-            if row_index < len(self._last_rows):
-                payload.update(self._last_rows[row_index])
-            self.row_activated.emit(payload)
-
-    def refresh_theme(self):
-        try:
-            from nanosense.utils.config_manager import load_settings
-            theme = str(load_settings().get("theme", "dark")).lower()
-        except Exception:
-            theme = "dark"
-
-        text_color = "#000000" if theme == "light" else "#E2E8F0"
-        table_bg = "#FFFFFF" if theme == "light" else "#2D3748"
-        alt_bg = "#F3F4F6" if theme == "light" else "#374151"
-        border = "#D1D5DB" if theme == "light" else "#4A5568"
-        self.results_table.setStyleSheet(
-            "QTableWidget {{ background-color: {bg}; alternate-background-color: {alt}; color: {fg}; "
-            "gridline-color: {border}; border: 1px solid {border}; }}"
-            "QHeaderView::section {{ background-color: {bg}; color: {fg}; border: 1px solid {border}; }}"
-            .format(bg=table_bg, alt=alt_bg, fg=text_color, border=border)
-        )
-        self.results_table.setAlternatingRowColors(True)

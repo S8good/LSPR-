@@ -35,7 +35,7 @@ class LSPRSinglePredictionWidget(QWidget):
         self.model_mode_combo.addItem("In-process", "inprocess")
         self.model_mode_combo.addItem("Subprocess", "subprocess")
         self.model_mode_combo.setCurrentIndex(
-            max(0, self.model_mode_combo.findData(self.config.get("lspr_default_inference_model", "auto")))
+            max(0, self.model_mode_combo.findData(self.config.get("lspr_default_model_mode", "auto")))
         )
         controls_layout.addWidget(self.model_mode_combo)
 
