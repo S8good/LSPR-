@@ -197,6 +197,35 @@ def test_analysis_window_uses_lazy_service_creation():
     assert "_get_service_for_backend_mode" in workbench_source
 
 
+def test_analysis_window_has_current_spectrum_key_fallback_logic():
+    workbench_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_ai_analysis_window.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _ensure_current_spectrum_key" in workbench_source
+    assert "self.spectra_list_widget.currentItem()" in workbench_source
+    assert "next(iter(self.spectra.keys()), None)" in workbench_source
+
+
+def test_analysis_window_has_narrow_scrollable_left_panel_and_five_row_spectrum_list():
+    workbench_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_ai_analysis_window.py"
+    ).read_text(encoding="utf-8")
+
+    assert "QScrollArea" in workbench_source
+    assert "QFrame" in workbench_source
+    assert "control_scroll = QScrollArea(self)" in workbench_source
+    assert "control_scroll.setWidgetResizable(True)" in workbench_source
+    assert "control_scroll.setFixedWidth(460)" in workbench_source
+    assert "control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)" in workbench_source
+    assert "control_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)" in workbench_source
+    assert "control_scroll.setFrameShape(QFrame.NoFrame)" in workbench_source
+    assert "self.spectra_list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)" in workbench_source
+    assert "self._set_spectra_list_visible_rows(5)" in workbench_source
+    assert "def _set_spectra_list_visible_rows" in workbench_source
+    assert "QGridLayout" in workbench_source
+
+
 def test_single_prediction_widget_supports_importing_a_spectrum_file():
     widget_source = (
         PROJECT_ROOT / "nanosense" / "gui" / "lspr_ai_analysis_window.py"
@@ -218,6 +247,16 @@ def test_analysis_window_supports_selection_controls_and_plot_export():
     assert "_export_current_plot" in widget_source
     assert "_find_main_peak" in widget_source
     assert "_apply_comparison_result" in widget_source
+
+
+def test_analysis_window_source_plot_refresh_forces_autorange_after_plotting():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_ai_analysis_window.py"
+    ).read_text(encoding="utf-8")
+
+    assert "plot_item.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)" in widget_source
+    assert "plot_item.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)" in widget_source
+    assert "plot_item.autoRange()" in widget_source
 
 
 def test_analysis_window_refreshes_plot_when_preprocessing_toggles_change():
@@ -267,18 +306,64 @@ def test_model_comparison_widget_exists_with_minimal_controls():
     assert "setBackground(" in widget_source
 
 
+def test_model_comparison_widget_uses_theme_specific_distinct_line_palettes():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_model_comparison_widget.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _line_palette_for_theme" in widget_source
+    assert "theme == \"light\"" in widget_source
+    assert "return [" in widget_source
+    assert "#1f77b4" in widget_source
+    assert "#d62728" in widget_source
+    assert "#4FC3F7" in widget_source
+    assert "#FFB74D" in widget_source
+    assert "color=palette[row_index % len(palette)]" in widget_source
+    assert "pg.mkPen(" in widget_source
+
+
+def test_model_comparison_widget_warns_when_no_input_spectrum():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_model_comparison_widget.py"
+    ).read_text(encoding="utf-8")
+
+    assert "QMessageBox" in widget_source
+    assert "QMessageBox.warning(self, \"Model Comparison\", \"Select or import a spectrum first.\")" in widget_source
+
+
 def test_batch_prediction_widget_exists_with_minimal_controls():
     widget_source = (
         PROJECT_ROOT / "nanosense" / "gui" / "lspr_batch_prediction_widget.py"
     ).read_text(encoding="utf-8")
 
+    assert "Batch Summary" in widget_source
     assert "Load Folder..." in widget_source
     assert "Load Multi-column File..." in widget_source
     assert "Run Batch Prediction" in widget_source
     assert "results_table" in widget_source
+    assert "status_label" in widget_source
+    assert "loaded_count_label" in widget_source
+    assert "predicted_count_label" in widget_source
     assert "Export CSV..." in widget_source
     assert "row_activated" in widget_source
     assert "def refresh_theme" in widget_source
+
+
+def test_batch_prediction_widget_shows_import_feedback_and_pending_preview():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_batch_prediction_widget.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _apply_loaded_items" in widget_source
+    assert "def _populate_pending_results" in widget_source
+    assert "Loaded {len(items)} spectra" in widget_source
+    assert "\"Pending\"" in widget_source
+    assert "\"Awaiting run\"" in widget_source
+    assert "No spectra loaded." in widget_source
+    assert "QMessageBox.information" in widget_source
+    assert "Loaded: {loaded_count}" in widget_source
+    assert "Predicted: {predicted_count}" in widget_source
+    assert "def _update_summary_labels" in widget_source
 
 
 def test_analysis_window_connects_batch_rows_back_to_current_analysis_view():
@@ -288,6 +373,20 @@ def test_analysis_window_connects_batch_rows_back_to_current_analysis_view():
 
     assert "row_activated.connect" in widget_source
     assert "_open_batch_prediction_detail" in widget_source
+    assert "LSPRPredictionResult(" in widget_source
+    assert "self._last_prediction_result = prediction_result" in widget_source
+    assert "self.summary_widget.set_result(prediction_result)" in widget_source
+    assert "self.comparison_widget.clear_comparison_result()" in widget_source
+
+
+def test_comparison_widget_can_clear_stale_results():
+    widget_source = (
+        PROJECT_ROOT / "nanosense" / "gui" / "lspr_spectrum_comparison_widget.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def clear_comparison_result" in widget_source
+    assert "self._current_result = None" in widget_source
+    assert "self.status_label.setText(\"No comparison loaded.\")" in widget_source
 
 
 def test_measurement_widget_exposes_signal_for_sending_current_spectrum_to_lspr_ai():

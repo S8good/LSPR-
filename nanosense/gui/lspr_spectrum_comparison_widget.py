@@ -109,6 +109,16 @@ class LSPRSpectrumComparisonWidget(QWidget):
         )
         self._refresh_curve_visibility()
 
+    def clear_comparison_result(self):
+        self._current_result = None
+        self._input_curve = None
+        self._generated_curve = None
+        self._aligned_curve = None
+        self.plot_widget.clear()
+        self.plot_widget.addLegend()
+        self._apply_theme_styles()
+        self.status_label.setText("No comparison loaded.")
+
     def _refresh_curve_visibility(self):
         if self._input_curve is not None:
             self._input_curve.setVisible(self.show_input_checkbox.isChecked())

@@ -9,7 +9,9 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -18,6 +20,8 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -108,9 +112,20 @@ class LSPRAIAnalysisWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(10)
 
-        control_panel = QWidget(self)
+        control_scroll = QScrollArea(self)
+        control_scroll.setWidgetResizable(True)
+        control_scroll.setFixedWidth(460)
+        control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        control_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        control_scroll.setFrameShape(QFrame.NoFrame)
+
+        control_panel = QWidget()
         control_layout = QVBoxLayout(control_panel)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(8)
 
         self.import_spectrum_button = QPushButton("Import Spectrum...")
         self.import_spectrum_button.clicked.connect(self._import_spectrum_file)
@@ -119,7 +134,9 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.spectra_list_widget = QListWidget()
         self.spectra_list_widget.itemChanged.connect(self._update_curve_visibility)
         self.spectra_list_widget.currentItemChanged.connect(self._handle_spectrum_selection_changed)
-        control_layout.addWidget(self.spectra_list_widget, stretch=1)
+        self.spectra_list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        control_layout.addWidget(self.spectra_list_widget)
+        self._set_spectra_list_visible_rows(5)
 
         selection_layout = QHBoxLayout()
         self.select_all_button = QPushButton("Select All")
@@ -145,25 +162,37 @@ class LSPRAIAnalysisWindow(QMainWindow):
 
         ai_group = QGroupBox("AI Prediction")
         ai_layout = QVBoxLayout(ai_group)
-        ai_mode_row = QHBoxLayout()
-        ai_mode_row.addWidget(QLabel("Analysis Target:"))
+        ai_mode_row = QGridLayout()
+        ai_mode_row.setContentsMargins(0, 0, 0, 0)
+        ai_mode_row.setHorizontalSpacing(8)
+        ai_mode_row.setVerticalSpacing(6)
+
+        ai_mode_row.addWidget(QLabel("Analysis Target:"), 0, 0)
         self.analysis_target_combo = QComboBox()
         self.analysis_target_combo.currentIndexChanged.connect(self._handle_analysis_target_changed)
-        ai_mode_row.addWidget(self.analysis_target_combo)
-        ai_mode_row.addWidget(QLabel("Backend:"))
+        self.analysis_target_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        ai_mode_row.addWidget(self.analysis_target_combo, 0, 1)
+
+        ai_mode_row.addWidget(QLabel("Backend:"), 1, 0)
         self.backend_mode_combo = QComboBox()
         self.backend_mode_combo.addItem("Auto", "auto")
         self.backend_mode_combo.addItem("In-process", "inprocess")
         self.backend_mode_combo.addItem("Subprocess", "subprocess")
-        ai_mode_row.addWidget(self.backend_mode_combo)
+        self.backend_mode_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        ai_mode_row.addWidget(self.backend_mode_combo, 1, 1)
+
         self.prediction_model_label = QLabel("Prediction Model:")
-        ai_mode_row.addWidget(self.prediction_model_label)
+        ai_mode_row.addWidget(self.prediction_model_label, 2, 0)
         self.model_mode_combo = QComboBox()
-        ai_mode_row.addWidget(self.model_mode_combo)
+        self.model_mode_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        ai_mode_row.addWidget(self.model_mode_combo, 2, 1)
+
         self.generator_model_label = QLabel("Spectrum Generator:")
-        ai_mode_row.addWidget(self.generator_model_label)
+        ai_mode_row.addWidget(self.generator_model_label, 3, 0)
         self.generator_model_combo = QComboBox()
-        ai_mode_row.addWidget(self.generator_model_combo)
+        self.generator_model_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        ai_mode_row.addWidget(self.generator_model_combo, 3, 1)
+        ai_mode_row.setColumnStretch(1, 1)
         ai_layout.addLayout(ai_mode_row)
         self.run_ai_button = QPushButton("Run AI Prediction")
         self.run_ai_button.clicked.connect(self._run_ai_prediction)
@@ -251,8 +280,9 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.content_tabs.addTab(self.model_comparison_tab, "Model Comparison")
         self.content_tabs.addTab(self.batch_prediction_tab, "Batch Prediction")
 
-        main_layout.addWidget(control_panel, stretch=1)
-        main_layout.addWidget(self.content_tabs, stretch=2)
+        control_scroll.setWidget(control_panel)
+        main_layout.addWidget(control_scroll)
+        main_layout.addWidget(self.content_tabs, stretch=1)
         self._apply_theme_styles()
         self._on_preprocessing_controls_changed()
         self._populate_model_modes()
@@ -260,6 +290,16 @@ class LSPRAIAnalysisWindow(QMainWindow):
         backend_index = self.backend_mode_combo.findData(default_backend_mode)
         if backend_index >= 0:
             self.backend_mode_combo.setCurrentIndex(backend_index)
+
+    def _set_spectra_list_visible_rows(self, visible_rows: int = 5):
+        visible_rows = max(1, int(visible_rows))
+        row_height = self.spectra_list_widget.sizeHintForRow(0)
+        if row_height <= 0:
+            row_height = self.spectra_list_widget.fontMetrics().lineSpacing() + 10
+        frame = self.spectra_list_widget.frameWidth() * 2
+        margins = self.spectra_list_widget.contentsMargins().top() + self.spectra_list_widget.contentsMargins().bottom()
+        target_height = row_height * visible_rows + frame + margins
+        self.spectra_list_widget.setFixedHeight(target_height)
 
     def set_initial_data(self, spectra_data):
         spectra_list: List[Dict[str, object]]
@@ -373,11 +413,23 @@ class LSPRAIAnalysisWindow(QMainWindow):
         if not visible_keys:
             return
 
+        plotted_any = False
         for key in visible_keys:
             spectrum = self.spectra[key]
-            display_y = self._get_display_intensity(spectrum["y"])
+            x_data = np.asarray(spectrum["x"], dtype=float)
+            display_y = np.asarray(self._get_display_intensity(spectrum["y"]), dtype=float)
+            finite_mask = np.isfinite(x_data) & np.isfinite(display_y)
+            if not np.any(finite_mask):
+                continue
             pen = pg.mkPen("#d62728" if key == self.current_spectrum_key else "#1f77b4", width=2)
-            self.plot_widget.plot(spectrum["x"], display_y, pen=pen, name=spectrum["name"])
+            self.plot_widget.plot(x_data[finite_mask], display_y[finite_mask], pen=pen, name=spectrum["name"])
+            plotted_any = True
+
+        if plotted_any:
+            plot_item = self.plot_widget.getPlotItem()
+            plot_item.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+            plot_item.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+            plot_item.autoRange()
 
         if not self.current_spectrum_key:
             self.current_spectrum_key = visible_keys[0]
@@ -439,9 +491,10 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.batch_prediction_tab.refresh_theme()
 
     def _get_current_spectrum(self):
-        if not self.current_spectrum_key:
+        current_key = self._ensure_current_spectrum_key()
+        if not current_key:
             return None
-        spectrum = self.spectra.get(self.current_spectrum_key)
+        spectrum = self.spectra.get(current_key)
         if spectrum is None:
             return None
         return {
@@ -450,6 +503,34 @@ class LSPRAIAnalysisWindow(QMainWindow):
             'y': np.asarray(self._get_display_intensity(spectrum['y']), dtype=float),
             'metadata': dict(spectrum.get('metadata', {})),
         }
+
+    def _ensure_current_spectrum_key(self):
+        if self.current_spectrum_key in self.spectra:
+            return self.current_spectrum_key
+
+        current_item = self.spectra_list_widget.currentItem()
+        if current_item is not None:
+            key = current_item.data(Qt.UserRole)
+            if key in self.spectra:
+                self.current_spectrum_key = key
+                return key
+
+        for row in range(self.spectra_list_widget.count()):
+            item = self.spectra_list_widget.item(row)
+            key = item.data(Qt.UserRole)
+            if key in self.spectra:
+                self.current_spectrum_key = key
+                if self.spectra_list_widget.currentRow() != row:
+                    self.spectra_list_widget.setCurrentRow(row)
+                combo_index = self.analysis_target_combo.findData(key)
+                if combo_index >= 0 and self.analysis_target_combo.currentIndex() != combo_index:
+                    self.analysis_target_combo.setCurrentIndex(combo_index)
+                return key
+
+        key = next(iter(self.spectra.keys()), None)
+        if key is not None:
+            self.current_spectrum_key = key
+        return key
 
     def _get_display_intensity(self, intensity):
         working = np.asarray(intensity, dtype=float)
@@ -526,13 +607,14 @@ class LSPRAIAnalysisWindow(QMainWindow):
             self.comparison_note_label.setText("")
 
     def _find_main_peak(self):
-        if not self.current_spectrum_key:
+        current_key = self._ensure_current_spectrum_key()
+        if not current_key:
             QMessageBox.warning(self, "Peak Analysis", "Select or import a spectrum first.")
             return
         if self.main_peak_marker is not None:
             self.main_peak_marker.clear()
 
-        spectrum = self.spectra[self.current_spectrum_key]
+        spectrum = self.spectra[current_key]
         x_data = np.asarray(spectrum["x"], dtype=float)
         y_data = np.asarray(self._get_display_intensity(spectrum["y"]), dtype=float)
         if x_data.size < 3 or y_data.size < 3:
@@ -560,11 +642,12 @@ class LSPRAIAnalysisWindow(QMainWindow):
         self.main_peak_fwhm_label.setText(f"{fwhm:.4f} nm")
 
     def _run_ai_prediction(self):
-        if not self.current_spectrum_key:
+        current_key = self._ensure_current_spectrum_key()
+        if not current_key:
             QMessageBox.warning(self, "LSPR AI", "Select or import a spectrum first.")
             return
 
-        spectrum = self.spectra[self.current_spectrum_key]
+        spectrum = self.spectra[current_key]
         wavelengths = spectrum["x"].tolist()
         intensities = self._get_display_intensity(spectrum["y"]).tolist()
         metadata = dict(spectrum.get("metadata", {}))
@@ -633,6 +716,40 @@ class LSPRAIAnalysisWindow(QMainWindow):
             "reported_text": payload.get("reported_text"),
         }
         self.set_input_spectrum(wavelengths, intensities, metadata=metadata)
+        self._last_comparison_result = None
+        self.comparison_widget.clear_comparison_result()
+        self.comparison_concentration_label.setText("Conc: N/A")
+        self.comparison_report_mode_label.setText("Mode: N/A")
+        self.comparison_scale_label.setText("Scale: N/A")
+        self.comparison_offset_label.setText("Offset: N/A")
+        self.fallback_applied_label.setText("Fallback: N/A")
+        self.comparison_note_label.setText("Batch result loaded. Click Run AI Prediction for full spectrum comparison.")
+
+        concentration = payload.get("predicted_concentration_ng_ml")
+        if concentration is not None:
+            prediction_model_mode = str(payload.get("prediction_model_mode", payload.get("model_mode", "auto")))
+            prediction_backend = str(payload.get("prediction_backend", payload.get("backend", "batch_prediction")))
+            prediction_result = LSPRPredictionResult(
+                predicted_concentration_ng_ml=float(concentration),
+                report_mode=str(payload.get("report_mode", "")),
+                reported_text=str(payload.get("reported_text", "")),
+                uloq_ng_ml=float(payload["uloq_ng_ml"]) if payload.get("uloq_ng_ml") not in (None, "") else None,
+                super_quant_bin=payload.get("super_quant_bin"),
+                metrics={},
+                backend=prediction_backend,
+                model_mode=prediction_model_mode,
+                prediction_model_mode=prediction_model_mode,
+                prediction_backend=prediction_backend,
+                fallback_applied=bool(payload.get("fallback_applied", False)),
+                fallback_reason=payload.get("fallback_reason"),
+                generator_model_mode=payload.get("generator_model_mode"),
+                generator_backend=payload.get("generator_backend"),
+            )
+            self._last_prediction_result = prediction_result
+            self.summary_widget.set_result(prediction_result)
+        else:
+            self._last_prediction_result = None
+            self.summary_widget.clear_result()
         self.content_tabs.setCurrentIndex(0)
 
     def _archive_current_ai_result(self):
