@@ -3,13 +3,45 @@
 import sys
 import os
 import time
+import traceback
+import datetime
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QIcon
 from nanosense.gui.main_window import AppWindow
 from nanosense.gui.splash_screen import SplashScreen
 from nanosense.gui.welcome_widget import WelcomeWidget
+from nanosense.utils.config_manager import load_settings
 import pyqtgraph as pg
+
+
+def _install_global_excepthook():
+    """
+    把所有未捕获异常写到 logs/crash.log，避免直接闪退还能拿到现场。
+    依然保留默认 print，用户在终端里也能看到。
+    """
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    crash_log = os.path.join(log_dir, 'crash.log')
+
+    def _hook(exc_type, exc_value, exc_tb):
+        # KeyboardInterrupt 还是按默认行为走，方便 Ctrl+C 退出
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        try:
+            with open(crash_log, 'a', encoding='utf-8') as f:
+                f.write(f"\n=== {datetime.datetime.now().isoformat()} ===\n")
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        except Exception:
+            pass
+        # 终端也保留一份
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _hook
+
+
+_install_global_excepthook()
 
 # 设置图表样式
 pg.setConfigOption('background', '#F0F0F0')
@@ -20,23 +52,54 @@ pg.setConfigOption('foreground', '#E2E8F0')
 welcome_screen = None
 main_app_window = None
 
-def show_welcome_screen(use_real_hardware=True):
+def _resolve_welcome_hardware_selection(use_real_hardware=None, hardware_vendor=None, settings=None):
+    """
+    Resolve launcher hardware selection from explicit restart arguments and saved settings.
+    Explicit arguments win; omitted values fall back to config.
+    """
+    if settings is None:
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+
+    if use_real_hardware is None:
+        use_real_hardware = bool(settings.get('use_real_hardware', True))
+
+    if hardware_vendor is None:
+        hardware_vendor = settings.get('hardware_vendor')
+
+    if not use_real_hardware:
+        return False, 'mock'
+
+    vendor = (hardware_vendor or 'ideaoptics').lower()
+    if vendor not in {'ideaoptics', 'ocean'}:
+        vendor = 'ideaoptics'
+    return True, vendor
+
+
+def show_welcome_screen(use_real_hardware=None, hardware_vendor=None):
     """
     创建并显示欢迎/启动器窗口。
     这是程序启动和重启的入口点。
     """
     global welcome_screen
+    use_real_hardware, hardware_vendor = _resolve_welcome_hardware_selection(
+        use_real_hardware,
+        hardware_vendor,
+    )
+
     welcome_screen = WelcomeWidget()
     if use_real_hardware:
-        welcome_screen.hardware_mode_combo.setCurrentIndex(0)  # 0 是 "真实硬件"
+        welcome_screen.set_hardware_vendor(hardware_vendor)
     else:
-        welcome_screen.hardware_mode_combo.setCurrentIndex(1)  # 1 是 "模拟API"
+        welcome_screen.set_hardware_vendor('mock')
 
     # 连接信号：当用户在欢迎页选择模式后，启动主程序
     welcome_screen.mode_selected.connect(launch_main_app)
     welcome_screen.show()
 
-def launch_main_app(mode_name, use_real_hardware):
+def launch_main_app(mode_name, use_real_hardware, hardware_vendor='ideaoptics'):
     """
     【已升级】这个函数现在会在硬件连接失败时返回欢迎页，而不是退出
     """
@@ -46,9 +109,9 @@ def launch_main_app(mode_name, use_real_hardware):
     if welcome_screen:
         welcome_screen.hide()
 
-    print(f"接收到启动信号，模式: {mode_name}, 使用真实硬件: {use_real_hardware}")
+    print(f"接收到启动信号，模式: {mode_name}, 使用真实硬件: {use_real_hardware}, vendor: {hardware_vendor}")
 
-    main_app_window = AppWindow(use_real_hardware=use_real_hardware)
+    main_app_window = AppWindow(use_real_hardware=use_real_hardware, hardware_vendor=hardware_vendor)
 
     # --- 【核心修改】检查硬件连接是否失败 ---
     if main_app_window.controller is None:

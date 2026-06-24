@@ -10,7 +10,7 @@ class FX2000Controller:
     """
     _instance = None
 
-    def __init__(self, wrapper_instance, use_real_hardware, device_index=0):
+    def __init__(self, wrapper_instance, use_real_hardware, device_index=0, hardware_vendor=None):
         """
         私有构造函数，不应直接调用。请使用 connect() 方法。
         """
@@ -20,6 +20,8 @@ class FX2000Controller:
         self.api_wrapper = wrapper_instance
         self.device_index = device_index
         self.is_real_hardware = use_real_hardware
+        # 'ideaoptics' | 'ocean' | 'mock'
+        self.hardware_vendor = hardware_vendor or ('ideaoptics' if use_real_hardware else 'mock')
 
         self.in_endpoint = None
 
@@ -58,37 +60,55 @@ class FX2000Controller:
             print("模拟模式或未找到输入端点，无需中止管道。")
 
     @classmethod
-    def connect(cls, use_real_hardware=True, device_index=0):
+    def connect(cls, use_real_hardware=True, device_index=0, hardware_vendor=None):
         """
         连接到光谱仪的工厂方法。
         如果实例已存在，则直接返回；否则，创建新实例。
-        :param use_real_hardware:布尔值，True表示连接真实硬件，False表示使用模拟API。
+        :param use_real_hardware: 布尔值，True表示连接真实硬件，False表示使用模拟API。
         :param device_index: 要连接的设备索引。
+        :param hardware_vendor: 'ideaoptics' (默认) 或 'ocean'，仅在真实硬件模式下生效。
         :return: 控制器实例或None（如果连接失败）。
         """
         if cls._instance is None:
-            print(f"首次连接，模式: {'真实硬件' if use_real_hardware else '模拟API'}")
+            vendor = (hardware_vendor or ('ideaoptics' if use_real_hardware else 'mock')).lower()
+            print(f"首次连接，模式: {'真实硬件' if use_real_hardware else '模拟API'} (vendor={vendor})")
 
             Wrapper = None
             if use_real_hardware:
-                try:
-                    import clr
-                    # 计算并添加驱动路径
-                    driver_path = Path(__file__).resolve().parents[1] / 'drivers'
-                    if str(driver_path) not in sys.path:
-                        sys.path.append(str(driver_path))
-                    os.environ['PATH'] = f"{str(driver_path)};{os.environ['PATH']}"
+                if vendor == 'ocean':
+                    try:
+                        # 把项目根目录加入 sys.path 以便导入 ocean_direct_api
+                        project_root = Path(__file__).resolve().parents[2]
+                        if str(project_root) not in sys.path:
+                            sys.path.insert(0, str(project_root))
+                        from ocean_direct_api import Wrapper
+                        print("已成功加载真实硬件驱动: OceanDirect SDK")
+                    except Exception as e:
+                        print(f"加载 OceanDirect 驱动失败: {e}，将回退到模拟模式。")
+                        from mock_spectrometer_api import Wrapper
+                        use_real_hardware = False
+                        vendor = 'mock'
+                else:
+                    try:
+                        import clr
+                        # 计算并添加驱动路径
+                        driver_path = Path(__file__).resolve().parents[2] / 'drivers'
+                        if str(driver_path) not in sys.path:
+                            sys.path.append(str(driver_path))
+                        os.environ['PATH'] = f"{str(driver_path)};{os.environ.get('PATH', '')}"
 
-                    clr.AddReference("IdeaOptics")
-                    from IdeaOptics import Wrapper
-                    print("已成功加载真实硬件驱动: IdeaOptics.dll")
-                except Exception as e:
-                    print(f"加载真实硬件驱动失败: {e}，将回退到模拟模式。")
-                    from mock_spectrometer_api import Wrapper
-                    use_real_hardware = False  # 强制切换模式
+                        clr.AddReference(str(driver_path / "IdeaOptics"))
+                        from IdeaOptics import Wrapper
+                        print("已成功加载真实硬件驱动: IdeaOptics.dll")
+                    except Exception as e:
+                        print(f"加载真实硬件驱动失败: {e}，将回退到模拟模式。")
+                        from mock_spectrometer_api import Wrapper
+                        use_real_hardware = False  # 强制切换模式
+                        vendor = 'mock'
             else:
                 from mock_spectrometer_api import Wrapper
                 print("当前为模拟硬件模式。")
+                vendor = 'mock'
 
             try:
                 api_wrapper = Wrapper()
@@ -98,7 +118,7 @@ class FX2000Controller:
                     print("未能找到任何光谱仪设备。请检查USB连接。")
                     return None
 
-                cls(api_wrapper, use_real_hardware, device_index)
+                cls(api_wrapper, use_real_hardware, device_index, hardware_vendor=vendor)
                 print(f"已连接到设备: {cls._instance.name} (SN: {cls._instance.serial_number})")
 
             except Exception as e:

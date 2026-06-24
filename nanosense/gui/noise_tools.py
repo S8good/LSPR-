@@ -9,8 +9,10 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QPushButton, QMessageBox,
 from PyQt5.QtCore import QObject, pyqtSignal, QEvent, Qt
 import pyqtgraph as pg
 
+from ..utils.qt_safe import SafeEmitMixin
 
-class RealTimeNoiseWorker(QObject):
+
+class RealTimeNoiseWorker(SafeEmitMixin, QObject):
     finished = pyqtSignal(str, object, object, float)  # folder_path, wavelengths, noise_spectrum, average_noise
     progress = pyqtSignal(int, str)
     error = pyqtSignal(str)
@@ -37,12 +39,12 @@ class RealTimeNoiseWorker(QObject):
 
             spectra_list = []
             wavelengths = self.controller.wavelengths
-            self.progress.emit(0, self.tr("Starting real-time acquisition..."))
+            self._safe_emit(self.progress, 0, self.tr("Starting real-time acquisition..."))
 
             # 2. 循环采集并保存原始数据
             for i in range(self.num_spectra):
-                if not self._is_running:
-                    self.error.emit(self.tr("Task was aborted by the user."))
+                if not self._is_running or not self._is_alive():
+                    self._safe_emit(self.error, self.tr("Task was aborted by the user."))
                     return
 
                 _, spectrum = self.controller.get_spectrum()
@@ -56,10 +58,13 @@ class RealTimeNoiseWorker(QObject):
                     time.sleep(self.interval)
 
                 progress_val = int(((i + 1) / self.num_spectra) * 100)
-                self.progress.emit(progress_val,
-                                   self.tr("Acquiring spectra ({0}/{1})...").format(i + 1, self.num_spectra))
+                self._safe_emit(
+                    self.progress,
+                    progress_val,
+                    self.tr("Acquiring spectra ({0}/{1})...").format(i + 1, self.num_spectra),
+                )
 
-            self.progress.emit(95, self.tr("Aggregating raw data..."))
+            self._safe_emit(self.progress, 95, self.tr("Aggregating raw data..."))
             summary_data_dict = {'Wavelength (nm)': wavelengths}
             for i, spectrum_data in enumerate(spectra_list):
                 summary_data_dict[f'Intensity_Run_{i + 1}'] = spectrum_data
@@ -69,7 +74,7 @@ class RealTimeNoiseWorker(QObject):
             summary_df.to_excel(summary_file_path, index=False, engine='openpyxl')
 
             # 3. 核心计算
-            self.progress.emit(90, self.tr("Calculating noise..."))
+            self._safe_emit(self.progress, 90, self.tr("Calculating noise..."))
             spectra_matrix = np.array(spectra_list).T
             noise_per_wavelength = np.std(spectra_matrix, axis=1, ddof=1)
             average_noise = np.mean(noise_per_wavelength)
@@ -100,11 +105,11 @@ class RealTimeNoiseWorker(QObject):
             fig.savefig(os.path.join(results_dir, "raw_spectra_overlay.png"))
             plt.close(fig)
 
-            self.progress.emit(100, self.tr("Completed!"))
-            self.finished.emit(results_dir, wavelengths, noise_per_wavelength, average_noise)
+            self._safe_emit(self.progress, 100, self.tr("Completed!"))
+            self._safe_emit(self.finished, results_dir, wavelengths, noise_per_wavelength, average_noise)
 
         except Exception as e:
-            self.error.emit(str(e))
+            self._safe_emit(self.error, str(e))
 
 
 class NoiseResultDialog(QDialog):

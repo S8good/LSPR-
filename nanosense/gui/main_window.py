@@ -49,23 +49,24 @@ from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTranslator
 class AppWindow(QMainWindow):
     """主应用程序窗口类"""
     
-    restart_requested = pyqtSignal(bool)
-    
-    def __init__(self, use_real_hardware=True):
+    restart_requested = pyqtSignal(bool, str)
+
+    def __init__(self, use_real_hardware=True, hardware_vendor='ideaoptics'):
         super().__init__()
         self.setWindowTitle(self.tr("Nanophotonics sensing detection data visualization analysis system"))
         self.setGeometry(100, 100, 1280, 800)
-        
+
         # 应用设置和翻译
         self.app_settings = load_settings()
         print(f"加载的应用设置: {self.app_settings}")
         self.translator = None
         initial_language = self.app_settings.get('language', 'en')
         self.current_language = self._load_translator(initial_language)
-        
+
         # 硬件模式状态
         self.use_real_hardware = use_real_hardware
-        print(f"硬件模式设置: {'真实硬件' if use_real_hardware else '模拟API'}")
+        self.hardware_vendor = hardware_vendor or ('ideaoptics' if use_real_hardware else 'mock')
+        print(f"硬件模式设置: {'真实硬件' if use_real_hardware else '模拟API'} (vendor={self.hardware_vendor})")
         
         # 窗口和管理器
         self.analysis_windows = []
@@ -289,6 +290,16 @@ class AppWindow(QMainWindow):
         
         # 关于
         menu.about_action.triggered.connect(self._show_about_dialog)
+
+        # 新手指引
+        if hasattr(menu, 'onboarding_main_action'):
+            menu.onboarding_main_action.triggered.connect(self._run_onboarding_main)
+        if hasattr(menu, 'onboarding_analysis_action'):
+            menu.onboarding_analysis_action.triggered.connect(self._run_onboarding_analysis)
+        if hasattr(menu, 'onboarding_batch_action'):
+            menu.onboarding_batch_action.triggered.connect(self._run_onboarding_batch)
+        if hasattr(menu, 'onboarding_replay_all_action'):
+            menu.onboarding_replay_all_action.triggered.connect(self._run_onboarding_replay_all)
         
         # 添加动作到窗口
         self.addAction(menu.go_home_action)
@@ -313,6 +324,8 @@ class AppWindow(QMainWindow):
         
         was_real = requested_mode
         self.use_real_hardware = actual_mode
+        if not actual_mode:
+            self.hardware_vendor = 'mock'
         self._sync_hardware_mode_action()
         
         if was_real and not actual_mode and not self._hardware_mode_warning_shown:
@@ -333,23 +346,24 @@ class AppWindow(QMainWindow):
         :return: (controller, fallback_attempted)
         """
         fallback_attempted = False
-        
+
         if requested_mode:
             self._hardware_mode_warning_shown = False
-        
-        controller = FX2000Controller.connect(use_real_hardware=requested_mode)
+
+        vendor = getattr(self, 'hardware_vendor', 'ideaoptics')
+        controller = FX2000Controller.connect(use_real_hardware=requested_mode, hardware_vendor=vendor)
         if controller:
             actual_mode = bool(getattr(controller, 'is_real_hardware', requested_mode))
             self._handle_controller_mode_change(actual_mode, requested_mode)
             return controller, fallback_attempted
-        
+
         if requested_mode and allow_fallback:
             fallback_attempted = True
-            controller = FX2000Controller.connect(use_real_hardware=False)
+            controller = FX2000Controller.connect(use_real_hardware=False, hardware_vendor='mock')
             if controller:
                 self._handle_controller_mode_change(False, requested_mode)
                 return controller, fallback_attempted
-        
+
         return None, fallback_attempted
     def _setup_initial_state(self):
         """根据传入的硬件模式，设置复选框的初始状态。"""
@@ -371,6 +385,10 @@ class AppWindow(QMainWindow):
             )
             if reply == QMessageBox.Ok:
                 self.use_real_hardware = checked
+                if self.use_real_hardware and self.hardware_vendor == 'mock':
+                    self.hardware_vendor = 'ideaoptics'
+                elif not self.use_real_hardware:
+                    self.hardware_vendor = 'mock'
                 if self.use_real_hardware:
                     self._hardware_mode_warning_shown = False
                 self._sync_hardware_mode_action()
@@ -384,11 +402,12 @@ class AppWindow(QMainWindow):
         if hasattr(self, 'app_settings'):
             from ..utils.config_manager import save_settings
             self.app_settings['use_real_hardware'] = self.use_real_hardware
+            self.app_settings['hardware_vendor'] = self.hardware_vendor
             save_settings(self.app_settings)
-            
+
         if self.controller:
             self.controller.disconnect()
-        self.restart_requested.emit(self.use_real_hardware)
+        self.restart_requested.emit(self.use_real_hardware, self.hardware_vendor)
         self.close()
     
     def switch_to_initial_view(self, mode_name):
@@ -399,6 +418,42 @@ class AppWindow(QMainWindow):
         else:
             self.measurement_page.set_mode(mode_name)
             self.stacked_widget.setCurrentWidget(self.measurement_page)
+
+        if not self.app_settings.get('onboarding_main_window_done', False):
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(400, self._run_onboarding_main)
+
+    def _run_onboarding_main(self):
+        from .onboarding_tours import run_main_window_tour
+
+        def _done(_completed):
+            self.app_settings['onboarding_main_window_done'] = True
+            try:
+                save_settings(self.app_settings)
+            except Exception:
+                pass
+
+        run_main_window_tour(self, on_finished=_done)
+
+    def _run_onboarding_analysis(self):
+        from .onboarding_tours import run_analysis_tour
+        run_analysis_tour(self)
+
+    def _run_onboarding_batch(self):
+        from .onboarding_tours import run_batch_tour
+        run_batch_tour(self)
+
+    def _run_onboarding_replay_all(self):
+        from .onboarding_tours import (
+            run_main_window_tour, run_analysis_tour, run_batch_tour,
+        )
+
+        def after_main(_):
+            def after_analysis(_):
+                run_batch_tour(self)
+            run_analysis_tour(self, on_finished=after_analysis)
+
+        run_main_window_tour(self, on_finished=after_main)
     
     def connect_hardware(self):
         """连接硬件"""
@@ -937,14 +992,37 @@ class AppWindow(QMainWindow):
 
     def closeEvent(self, event):
         """关闭事件处理"""
-        # 【修改】在关闭前关闭数据库连接
-        if self.db_manager:
-            self.db_manager.close()
-            print("数据库连接已关闭。")
-        
+        # 先停所有后台活动，确保没人还在往 db 写
         if hasattr(self, 'measurement_page'):
-            self.measurement_page.stop_all_activities()
-        
+            try:
+                self.measurement_page.stop_all_activities()
+            except Exception as exc:
+                print(f"stop_all_activities 异常: {exc}")
+
+        # 等可能还在跑的批采 worker 退出（有锁保护，最多等 2 秒）
+        thread = getattr(self, 'batch_thread', None)
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    worker = getattr(self, 'batch_worker', None)
+                    if worker is not None:
+                        try:
+                            worker.stop()
+                        except Exception:
+                            pass
+                    thread.quit()
+                    thread.wait(2000)
+            except RuntimeError:
+                pass
+
+        # 最后关数据库
+        if self.db_manager:
+            try:
+                self.db_manager.close()
+                print("数据库连接已关闭。")
+            except Exception as exc:
+                print(f"关闭数据库异常: {exc}")
+
         print("正在退出应用...")
         event.accept()
 
@@ -1640,6 +1718,11 @@ class AppWindow(QMainWindow):
         self.batch_worker.finished.connect(self.batch_thread.quit)
         self.batch_worker.finished.connect(self.batch_worker.deleteLater)
         self.batch_thread.finished.connect(self.batch_thread.deleteLater)
+
+        # 用户中止/关闭对话框时，先把 worker 停掉，避免它在被 deleteLater 后还在 emit
+        self.run_dialog.abort_mission.connect(
+            self.batch_worker.stop, Qt.DirectConnection
+        )
         
         # 错误处理
         self.batch_worker.error.connect(
@@ -1758,6 +1841,11 @@ class AppWindow(QMainWindow):
                 # 自动打开批量分析对话框
                 analysis_dialog = DataAnalysisDialog(self, initial_folder=output_folder)
                 analysis_dialog.exec_()
+
+        # worker / thread 已经各自走 deleteLater，这里把 Python 端引用断掉，
+        # 避免下次启动批量任务前残留的属性指向半销毁对象。
+        self.batch_worker = None
+        self.batch_thread = None
     def update_run_dialog(self, status: dict):
         """更新运行对话框状态"""
         if "instruction" in status:

@@ -3,7 +3,9 @@
 import os
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QPushButton, QLabel, QGraphicsDropShadowEffect, QHBoxLayout, QComboBox, QSizePolicy
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPixmap, QColor
-from PyQt5.QtCore import QSize, pyqtSignal, Qt
+from PyQt5.QtCore import QSize, QTimer, pyqtSignal, Qt
+
+from ..utils.config_manager import load_settings, save_settings
 
 
 # --- 【新增】创建一个自定义的按钮类来处理悬停效果 ---
@@ -48,7 +50,7 @@ class HoverButton(QPushButton):
 
 
 class WelcomeWidget(QWidget):
-    mode_selected = pyqtSignal(str, bool) # str: 模式名, bool: 是否使用真实硬件
+    mode_selected = pyqtSignal(str, bool, str) # str: 模式名, bool: 是否使用真实硬件, str: 硬件厂商('ideaoptics'/'ocean'/'mock')
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,6 +79,34 @@ class WelcomeWidget(QWidget):
             painter = QPainter(self)
             painter.drawPixmap(self.rect(), self.background_pixmap)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_onboarding_auto_checked", False):
+            return
+        self._onboarding_auto_checked = True
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+        if not settings.get("onboarding_welcome_done", False):
+            QTimer.singleShot(250, self._start_onboarding_tour)
+
+    def _start_onboarding_tour(self):
+        from .onboarding_tours import run_welcome_tour
+
+        def _on_finished(_completed):
+            try:
+                settings = load_settings()
+            except Exception:
+                settings = {}
+            settings["onboarding_welcome_done"] = True
+            try:
+                save_settings(settings)
+            except Exception:
+                pass
+
+        run_welcome_tour(self, on_finished=_on_finished)
+
     def init_ui(self):
         self.setStyleSheet("""
                 #welcomeWidget QLabel { background: transparent; color: #E2E8F0; font-weight: bold; }
@@ -89,6 +119,25 @@ class WelcomeWidget(QWidget):
         # --- Hardware Mode Switch ---
         top_layout = QHBoxLayout()
         top_layout.addStretch()
+
+        self.onboarding_button = QPushButton(self.tr("Onboarding"))
+        self.onboarding_button.setObjectName("onboardingButton")
+        self.onboarding_button.setStyleSheet(
+            """
+            QPushButton#onboardingButton {
+                color: white;
+                font-weight: bold;
+                background-color: #3182CE;
+                border: 1px solid #2B6CB0;
+                border-radius: 4px;
+                padding: 4px 12px;
+            }
+            QPushButton#onboardingButton:hover { background-color: #2B6CB0; }
+            """
+        )
+        self.onboarding_button.clicked.connect(self._start_onboarding_tour)
+        top_layout.addWidget(self.onboarding_button)
+
         self.hardware_mode_combo = QComboBox()
 
         self.hardware_mode_combo.setStyleSheet("""
@@ -177,10 +226,11 @@ class WelcomeWidget(QWidget):
             button = HoverButton(icon_path)
             button.setFixedHeight(140)
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            button.clicked.connect(lambda checked, mode=text_key: self.mode_selected.emit(mode,
-                                                                                          self.hardware_mode_combo.currentText().startswith(
-                                                                                              self.tr(
-                                                                                                  "Real Hardware"))))
+            button.clicked.connect(lambda checked, mode=text_key: self.mode_selected.emit(
+                mode,
+                self._is_real_hardware_selected(),
+                self._current_vendor(),
+            ))
             grid_layout.addWidget(button, row, column)
 
             self.mode_buttons.append(button)
@@ -202,15 +252,31 @@ class WelcomeWidget(QWidget):
         self.title_label.setText(self.tr("Nanophotonics sensing detection data visualization analysis system"))
         self.subtitle_label.setText(self.tr("Sensors and Microsystems Laboratory"))
 
-        # 重新翻译下拉框
-        current_selection = self.hardware_mode_combo.currentText()
+        if hasattr(self, "onboarding_button"):
+            self.onboarding_button.setText(self.tr("Onboarding"))
+
+        # 重新翻译下拉框（保留当前 vendor 选择，避免语言切换后回到默认项）
+        previous_vendor = self._current_vendor() if self.hardware_mode_combo.count() else 'ideaoptics'
+
+        self.hardware_mode_combo.blockSignals(True)
         self.hardware_mode_combo.clear()
-        items = [self.tr("Real Hardware"), self.tr("Mock API")]
-        self.hardware_mode_combo.addItems(items)
-        if self.tr("Mock API") in current_selection:
-            self.hardware_mode_combo.setCurrentIndex(1)
-        else:
-            self.hardware_mode_combo.setCurrentIndex(0)
+        # (label, vendor) — Mock 不区分厂商
+        self._hardware_mode_items = [
+            (self.tr("Real Hardware (IdeaOptics)"), 'ideaoptics'),
+            (self.tr("Real Hardware (Ocean Optics)"), 'ocean'),
+            (self.tr("Mock API"), 'mock'),
+        ]
+        for label, _vendor in self._hardware_mode_items:
+            self.hardware_mode_combo.addItem(label)
+
+        # 还原上一次选择
+        target_index = next(
+            (i for i, (_l, v) in enumerate(self._hardware_mode_items) if v == previous_vendor),
+            0,
+        )
+        self.hardware_mode_combo.setCurrentIndex(target_index)
+        self.hardware_mode_combo.blockSignals(False)
+        self._current_vendor_cache = self._current_vendor()
 
         # 【核心修改】只更新按钮的悬停提示 (Tooltip)
         for i in range(len(self.buttons_info)):
@@ -225,3 +291,25 @@ class WelcomeWidget(QWidget):
         if event.type() == event.LanguageChange:
             self._retranslate_ui()
         super().changeEvent(event)
+
+    # ── 硬件模式辅助方法 ─────────────────────────────────────
+    def _current_vendor(self) -> str:
+        """返回 ComboBox 当前选中的厂商: 'ideaoptics' / 'ocean' / 'mock'。"""
+        items = getattr(self, "_hardware_mode_items", None)
+        if not items:
+            return 'ideaoptics'
+        idx = max(0, self.hardware_mode_combo.currentIndex())
+        idx = min(idx, len(items) - 1)
+        return items[idx][1]
+
+    def _is_real_hardware_selected(self) -> bool:
+        return self._current_vendor() != 'mock'
+
+    def set_hardware_vendor(self, vendor: str):
+        """外部接口：按 vendor 字符串选中对应项。"""
+        items = getattr(self, "_hardware_mode_items", [])
+        for i, (_label, v) in enumerate(items):
+            if v == vendor:
+                self.hardware_mode_combo.setCurrentIndex(i)
+                self._current_vendor_cache = v
+                return

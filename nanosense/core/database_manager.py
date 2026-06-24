@@ -4,7 +4,9 @@ import sqlite3
 import os
 import json
 import time
+import threading
 import hashlib
+import functools
 import numpy as np
 from collections import defaultdict
 from .migration_runner import run_migrations
@@ -27,6 +29,27 @@ def _merge_nested_dict(target: Dict[str, Any], updates: Dict[str, Any]) -> Dict[
     return target
 
 
+def _synchronize_public_methods(cls):
+    """给类里所有 public 方法套 self._lock。RLock 允许嵌套调用。"""
+    for name, attr in list(cls.__dict__.items()):
+        if name.startswith('_') or not callable(attr):
+            continue
+
+        def _make(method):
+            @functools.wraps(method)
+            def wrapper(self, *args, **kwargs):
+                lock = getattr(self, '_lock', None)
+                if lock is None:
+                    return method(self, *args, **kwargs)
+                with lock:
+                    return method(self, *args, **kwargs)
+            return wrapper
+
+        setattr(cls, name, _make(attr))
+    return cls
+
+
+@_synchronize_public_methods
 class DatabaseManager:
     _instance = None
 
@@ -36,6 +59,8 @@ class DatabaseManager:
         return cls._instance
 
     def __init__(self, db_path=None):
+        if not hasattr(self, '_lock'):
+            self._lock = threading.RLock()
         if hasattr(self, '_init_complete') and self.db_path == db_path:
             return
         if db_path:

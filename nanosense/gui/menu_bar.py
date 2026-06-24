@@ -53,6 +53,12 @@ class MenuBar(QMenuBar):
         self.logging_system_action = QAction(self.tr('Logging System...'), self)
         self.about_action = QAction(self.tr('About'), self)
 
+        # --- Help / Onboarding Actions ---
+        self.onboarding_main_action = QAction(self.tr('Main Window Basics'), self)
+        self.onboarding_analysis_action = QAction(self.tr('Analysis Modules'), self)
+        self.onboarding_batch_action = QAction(self.tr('Batch Workflow'), self)
+        self.onboarding_replay_all_action = QAction(self.tr('Replay All Tours'), self)
+
     def _create_menus(self):
         """创建所有主菜单，并将Action添加进去。"""
         # --- File Menu ---
@@ -125,6 +131,13 @@ class MenuBar(QMenuBar):
 
         # --- Help Menu ---
         self.help_menu = self.addMenu(self.tr('&Help'))
+        self.onboarding_menu = self.help_menu.addMenu(self.tr('Onboarding'))
+        self.onboarding_menu.addAction(self.onboarding_main_action)
+        self.onboarding_menu.addAction(self.onboarding_analysis_action)
+        self.onboarding_menu.addAction(self.onboarding_batch_action)
+        self.onboarding_menu.addSeparator()
+        self.onboarding_menu.addAction(self.onboarding_replay_all_action)
+        self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
 
     def _retranslate_ui(self):
@@ -167,6 +180,12 @@ class MenuBar(QMenuBar):
         self.lspr_simulation_action.setText(self.tr('LSPR Sensor Simulation'))
 
         self.about_action.setText(self.tr('About'))
+
+        self.onboarding_menu.setTitle(self.tr('Onboarding'))
+        self.onboarding_main_action.setText(self.tr('Main Window Basics'))
+        self.onboarding_analysis_action.setText(self.tr('Analysis Modules'))
+        self.onboarding_batch_action.setText(self.tr('Batch Workflow'))
+        self.onboarding_replay_all_action.setText(self.tr('Replay All Tours'))
 
         # 2. 重新翻译所有菜单的标题
         self.file_menu.setTitle(self.tr('&File'))

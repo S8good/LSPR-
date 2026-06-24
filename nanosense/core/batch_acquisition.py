@@ -29,6 +29,8 @@ from PyQt5.QtWidgets import (
     QHeaderView,
 )
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, Qt, QEvent, QSize
+
+from ..utils.qt_safe import SafeEmitMixin
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtSvg import QSvgRenderer
 from collections import defaultdict
@@ -1145,7 +1147,7 @@ class BatchRunDialog(QDialog):
             self._show_reference_hint()
 
 # --------------------------------------------------------------------------------
-class BatchAcquisitionWorker(QObject):
+class BatchAcquisitionWorker(SafeEmitMixin, QObject):
     """Thread-safe batch acquisition worker that processes commands from a queue."""
 
     finished = pyqtSignal()
@@ -1387,7 +1389,7 @@ class BatchAcquisitionWorker(QObject):
                 "result_wavelengths": self.cropped_wavelengths,
                 "all_results": all_completed_results,
             }
-            self.live_preview_data.emit(data_package)
+            self._safe_emit(self.live_preview_data, data_package)
             QThread.msleep(50)
         return True
 
@@ -1412,7 +1414,7 @@ class BatchAcquisitionWorker(QObject):
                 "result_wavelengths": self.cropped_wavelengths,
                 "all_results": all_completed_results,
             }
-            self.live_preview_data.emit(data_package)
+            self._safe_emit(self.live_preview_data, data_package)
             QThread.msleep(50)
         command = ("STOP", None)
         if self._is_running:
@@ -1616,15 +1618,15 @@ class BatchAcquisitionWorker(QObject):
         self, well_id: str, task_type: str, payload: Optional[Dict[str, Any]]
     ) -> bool:
         if payload is None:
-            self.error.emit("No spectrum data was provided for import.")
+            self._safe_emit(self.error, "No spectrum data was provided for import.")
             return False
         if task_type not in {"background", "reference"}:
-            self.error.emit("Import is only supported for background or reference steps.")
+            self._safe_emit(self.error, "Import is only supported for background or reference steps.")
             return False
 
         requested_type = payload.get("type")
         if requested_type and requested_type != task_type:
-            self.error.emit("Imported spectrum type does not match the current step.")
+            self._safe_emit(self.error, "Imported spectrum type does not match the current step.")
             return False
 
         aligned_values, error_message = self._align_imported_spectrum(
@@ -1632,10 +1634,10 @@ class BatchAcquisitionWorker(QObject):
         )
         if aligned_values is None:
             if error_message:
-                self.error.emit(error_message)
+                self._safe_emit(self.error, error_message)
             return False
         if np.isnan(aligned_values).all():
-            self.error.emit("Imported spectrum has no usable wavelength overlap.")
+            self._safe_emit(self.error, "Imported spectrum has no usable wavelength overlap.")
             return False
 
         file_path = payload.get("file_path", "")
@@ -1709,7 +1711,8 @@ class BatchAcquisitionWorker(QObject):
                 task_type = task["type"]
 
                 if task_type == "save":
-                    self.update_dialog.emit(
+                    self._safe_emit(
+                        self.update_dialog,
                         {
                             "instruction_key": "Saving data for {well_id}...",
                             "params": {"well_id": well_id},
@@ -1782,7 +1785,7 @@ class BatchAcquisitionWorker(QObject):
                     continue
 
                 if task_type == "background":
-                    self.update_dialog.emit({
+                    self._safe_emit(self.update_dialog, {
                         "instruction_key": "Please place [Background] for well {well_id}\\n(Live preview active...)",
                         "params": {"well_id": well_id},
                         "total_progress": int(self.task_index / total_tasks * 100),
@@ -1793,7 +1796,7 @@ class BatchAcquisitionWorker(QObject):
                         "back_button_enabled": self.task_index > 0 and not self.is_auto_enabled,
                     })
                 elif task_type == "reference":
-                    self.update_dialog.emit({
+                    self._safe_emit(self.update_dialog, {
                         "instruction_key": "Please place [Reference] for well {well_id}\\n(Live preview active...)",
                         "params": {"well_id": well_id},
                         "total_progress": int(self.task_index / total_tasks * 100),
@@ -1806,7 +1809,7 @@ class BatchAcquisitionWorker(QObject):
                 elif task_type == "signal":
                     point_num = task["point_num"]
                     points_done = len(self.collected_data[well_id]["signals"])
-                    self.update_dialog.emit({
+                    self._safe_emit(self.update_dialog, {
                         "instruction_key": "Please move to well {well_id}, point {point_num}/{total_points}\\n(Live preview active...)",
                         "params": {"well_id": well_id, "point_num": point_num, "total_points": self.points_per_well},
                         "point_progress": int((points_done / self.points_per_well) * 100),
@@ -1854,7 +1857,7 @@ class BatchAcquisitionWorker(QObject):
                             data["signals"].pop(point_num, None)
                             data["absorbance"].pop(point_num, None)
                             # 发出信号，通知UI从峰值表格中删除相应数据
-                            self.peak_removed.emit(rollback_well, point_num)
+                            self._safe_emit(self.peak_removed, rollback_well, point_num)
                         self.task_index -= 1
                     continue
 
@@ -1937,7 +1940,7 @@ class BatchAcquisitionWorker(QObject):
                         
                         # 发射峰值信息信号
                         if peak_info["peak_position"] is not None and peak_info["peak_intensity"] is not None:
-                            self.peak_found.emit(well_id, point_num, peak_info["peak_position"], peak_info["peak_intensity"])
+                            self._safe_emit(self.peak_found, well_id, point_num, peak_info["peak_position"], peak_info["peak_intensity"])
                         
                         self._save_spectrum_to_db(
                             well_id,
@@ -1960,7 +1963,7 @@ class BatchAcquisitionWorker(QObject):
                 self.task_index += 1
 
             if self._is_running:
-                self.update_dialog.emit({
+                self._safe_emit(self.update_dialog, {
                     "instruction_key": "Batch acquisition complete!",
                     "total_progress": 100,
                     "point_progress": 100,
@@ -2021,14 +2024,17 @@ class BatchAcquisitionWorker(QObject):
             except Exception as exc:
                 self.run_status = "failed"
                 print(f"Failed to generate batch summary file: {exc}")
-                self.error.emit(f"Failed to generate final summary file: {exc}")
+                self._safe_emit(self.error, f"Failed to generate final summary file: {exc}")
         except Exception as exc:
             self.run_status = "failed"
-            self.error.emit(str(exc))
+            self._safe_emit(self.error, str(exc))
         finally:
             if self.run_status == "pending":
                 self.run_status = "aborted"
-            self._finalize_batch_run(self.run_status)
+            try:
+                self._finalize_batch_run(self.run_status)
+            except RuntimeError:
+                pass
             self._is_running = False
-            self.finished.emit()
+            self._safe_emit(self.finished)
 

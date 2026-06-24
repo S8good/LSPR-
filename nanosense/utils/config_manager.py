@@ -20,6 +20,8 @@ def get_default_settings():
         "lspr_default_artifact_dir": "",
         "lspr_enable_digital_twin_overlay": True,
         "lspr_batch_export_dir": "",
+        "onboarding_welcome_done": False,
+        "onboarding_main_window_done": False,
         "mock_api_config": {
             "mode": "dynamic",
             "static_peak_pos": 650.0,

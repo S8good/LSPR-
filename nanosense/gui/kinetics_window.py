@@ -132,6 +132,10 @@ class KineticsWindow(QMainWindow):
         self.main_window = parent
         self.setObjectName("KineticsWindowRoot")
 
+        # 长跑保护：当点数超过 KINETICS_MAX_POINTS 时，做一次 2:1 抽稀，
+        # 保住全程趋势但让内存/绘制成本有界。50000 点 @1Hz 约 13 小时。
+        self.KINETICS_MAX_POINTS = 50000
+
         self.kinetics_time_data = []
         self.kinetics_wavelength_data = []
         # 光谱对比数据存储
@@ -909,6 +913,23 @@ CollapsibleBox > QToolButton:hover {
         self._update_baseline_status()
         self._rebuild_peak_shift_curve()
 
+    def _thin_kinetics_buffers_if_needed(self):
+        """
+        长跑保护：达到上限后做一次 2:1 抽稀（保留偶数索引的点）。
+        每次抽稀让有效采样间隔翻倍，但总点数减半，内存成本始终有界。
+        """
+        limit = getattr(self, 'KINETICS_MAX_POINTS', 50000)
+        if len(self.kinetics_time_data) < limit:
+            return
+        # 保留偶数下标，时间序列依然单调
+        self.kinetics_time_data = self.kinetics_time_data[::2]
+        self.kinetics_wavelength_data = self.kinetics_wavelength_data[::2]
+        if self.peak_shift_time_data:
+            self.peak_shift_time_data = self.peak_shift_time_data[::2]
+            self.peak_shift_values = self.peak_shift_values[::2]
+        print(f"[kinetics] 数据点超过 {limit}，已做 2:1 抽稀，"
+              f"当前 {len(self.kinetics_time_data)} 点。")
+
     def _rebuild_peak_shift_curve(self):
         if self.baseline_peak_wavelength is None:
             self.peak_shift_time_data.clear()
@@ -1109,10 +1130,9 @@ CollapsibleBox > QToolButton:hover {
             peak_wl = float(peak_wl)
             self.kinetics_time_data.append(elapsed_time)
             self.kinetics_wavelength_data.append(peak_wl)
+            self._thin_kinetics_buffers_if_needed()
             self.sensorgram_curve.setData(self.kinetics_time_data, self.kinetics_wavelength_data)
-            
-            # DEBUG: 检查峰位移计算
-            print(f"更新峰位移: time={elapsed_time:.2f}s, peak={peak_wl:.2f}nm, baseline={self.baseline_peak_wavelength}")
+
             self._update_peak_shift_series(elapsed_time, peak_wl)
             
             # 更新峰位标记以显示 Δλ
