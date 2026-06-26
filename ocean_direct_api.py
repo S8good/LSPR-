@@ -16,6 +16,8 @@
 
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 
@@ -27,6 +29,9 @@ class Wrapper:
         self._device_ids = []
         self._devices = {}
         self._wavelengths_cache = {}
+        self._device_lock = threading.RLock()
+        self._spectrum_retry_count = 1
+        self._spectrum_retry_delay_s = 0.05
 
         # 把 drivers/Oceandirect 加入 sys.path 以便 import oceandirect
         driver_dir = Path(__file__).resolve().parent / "drivers" / "Oceandirect"
@@ -57,14 +62,15 @@ class Wrapper:
             return 0
 
     def closeAllSpectrometers(self):
-        for did in list(self._device_ids):
-            try:
-                self._api.close_device(did)
-            except Exception:
-                pass
-        self._device_ids = []
-        self._devices = {}
-        self._wavelengths_cache = {}
+        with self._lock():
+            for did in list(self._device_ids):
+                try:
+                    self._api.close_device(did)
+                except Exception:
+                    pass
+            self._device_ids = []
+            self._devices = {}
+            self._wavelengths_cache = {}
 
     # ── 信息查询 ────────────────────────────────────────────
 
@@ -73,42 +79,65 @@ class Wrapper:
             raise IndexError(f"无效的设备索引: {index}")
         return self._devices[self._device_ids[index]]
 
+    def _lock(self):
+        if not hasattr(self, "_device_lock"):
+            self._device_lock = threading.RLock()
+        return self._device_lock
+
+    def _is_transient_spectrum_error(self, error):
+        return "data transfer error" in str(error).lower()
+
     def getName(self, index):
-        try:
-            dev = self._device(index)
-            # OceanDirect SDK 没有统一 getName，用型号或序列号占位
-            for attr in ("get_model", "get_device_name"):
-                if hasattr(dev, attr):
-                    return str(getattr(dev, attr)())
-            return f"OceanDirect-{dev.get_serial_number()}"
-        except Exception:
-            return "OceanDirect"
+        with self._lock():
+            try:
+                dev = self._device(index)
+                # OceanDirect SDK 没有统一 getName，用型号或序列号占位
+                for attr in ("get_model", "get_device_name"):
+                    if hasattr(dev, attr):
+                        return str(getattr(dev, attr)())
+                return f"OceanDirect-{dev.get_serial_number()}"
+            except Exception:
+                return "OceanDirect"
 
     def getSerialNumber(self, index):
-        try:
-            return str(self._device(index).get_serial_number())
-        except Exception:
-            return ""
+        with self._lock():
+            try:
+                return str(self._device(index).get_serial_number())
+            except Exception:
+                return ""
 
     def getWavelengths(self, index):
-        if index in self._wavelengths_cache:
-            return self._wavelengths_cache[index]
-        wl = list(self._device(index).get_wavelengths())
-        self._wavelengths_cache[index] = wl
-        return wl
+        with self._lock():
+            if index in self._wavelengths_cache:
+                return self._wavelengths_cache[index]
+            wl = list(self._device(index).get_wavelengths())
+            self._wavelengths_cache[index] = wl
+            return wl
 
     # ── 参数设置 ────────────────────────────────────────────
 
     def setIntegrationTime(self, index, time_ms):
         # IdeaOptics 用毫秒，OceanDirect 用微秒
-        self._device(index).set_integration_time(int(time_ms) * 1000)
+        with self._lock():
+            self._device(index).set_integration_time(int(time_ms) * 1000)
 
     def setScansToAverage(self, index, num_scans):
-        dev = self._device(index)
-        if hasattr(dev, "set_scans_to_average"):
-            dev.set_scans_to_average(int(num_scans))
+        with self._lock():
+            dev = self._device(index)
+            if hasattr(dev, "set_scans_to_average"):
+                dev.set_scans_to_average(int(num_scans))
 
     # ── 光谱采集 ────────────────────────────────────────────
 
     def getSpectrum(self, index):
-        return list(self._device(index).get_formatted_spectrum())
+        retry_count = getattr(self, "_spectrum_retry_count", 1)
+        retry_delay_s = getattr(self, "_spectrum_retry_delay_s", 0.05)
+        for attempt in range(retry_count + 1):
+            try:
+                with self._lock():
+                    return list(self._device(index).get_formatted_spectrum())
+            except Exception as exc:
+                if attempt >= retry_count or not self._is_transient_spectrum_error(exc):
+                    raise
+                print(f"[OceanDirect] getSpectrum transient error, retrying: {exc}")
+                time.sleep(retry_delay_s)

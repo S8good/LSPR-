@@ -12,7 +12,7 @@ from nanosense.gui.main_window import AppWindow
 from nanosense.gui.splash_screen import SplashScreen
 from nanosense.gui.welcome_widget import WelcomeWidget
 from nanosense.utils.config_manager import load_settings
-import pyqtgraph as pg
+from nanosense.utils.plot_theme import configure_pyqtgraph_theme
 
 
 def _install_global_excepthook():
@@ -44,8 +44,7 @@ def _install_global_excepthook():
 _install_global_excepthook()
 
 # 设置图表样式
-pg.setConfigOption('background', '#F0F0F0')
-pg.setConfigOption('foreground', '#E2E8F0')
+configure_pyqtgraph_theme(load_settings().get('theme', 'dark'))
 
 # 全局变量，用于持有对窗口的引用，防止被垃圾回收
 # 我们现在需要分别管理欢迎页和主程序窗口

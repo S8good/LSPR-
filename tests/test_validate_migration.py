@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -32,7 +32,7 @@ def test_check_latency_detects_offenders():
         )
         """
     )
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     conn.execute(
         "INSERT INTO spectrum_sets VALUES (1, ?, ?)",
         (

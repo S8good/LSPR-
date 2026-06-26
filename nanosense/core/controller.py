@@ -22,6 +22,8 @@ class FX2000Controller:
         self.is_real_hardware = use_real_hardware
         # 'ideaoptics' | 'ocean' | 'mock'
         self.hardware_vendor = hardware_vendor or ('ideaoptics' if use_real_hardware else 'mock')
+        self.integration_time_ms = None
+        self.scans_to_average = None
 
         self.in_endpoint = None
 
@@ -159,10 +161,12 @@ class FX2000Controller:
 
     def set_integration_time(self, time_ms: int):
         """设置光谱仪的积分时间。"""
+        self.integration_time_ms = int(time_ms)
         self.api_wrapper.setIntegrationTime(self.device_index, time_ms)
 
     def set_scans_to_average(self, num_scans: int):
         """【新增】设置平均扫描次数。"""
+        self.scans_to_average = int(num_scans)
         if hasattr(self.api_wrapper, 'setScansToAverage'):
             self.api_wrapper.setScansToAverage(self.device_index, num_scans)
         else:

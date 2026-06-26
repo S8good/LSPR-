@@ -2981,6 +2981,11 @@ This action cannot be undone.</source>
         <translation>分析物浓度 [A] (nM):</translation>
     </message>
     <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="579"/>
+        <source>Cancer Biomarker:</source>
+        <translation>癌症标记物:</translation>
+    </message>
+    <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="580"/>
         <source>Kinetics Calculation Results</source>
         <translation>动力学计算结果</translation>
@@ -2991,9 +2996,29 @@ This action cannot be undone.</source>
         <translation>k_obs (1/s):</translation>
     </message>
     <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="581"/>
+        <source>k_obs Error (1/s):</source>
+        <translation>k_obs 误差 (1/s):</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="581"/>
+        <source>Association R²:</source>
+        <translation>结合相 R²:</translation>
+    </message>
+    <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="582"/>
         <source>k_d (1/s):</source>
         <translation>k_d (1/s):</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="582"/>
+        <source>k_d Error (1/s):</source>
+        <translation>k_d 误差 (1/s):</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="582"/>
+        <source>Dissociation R²:</source>
+        <translation>解离相 R²:</translation>
     </message>
     <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="583"/>
@@ -3056,6 +3081,11 @@ This action cannot be undone.</source>
         <translation>保存结果到数据库</translation>
     </message>
     <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="586"/>
+        <source>Save Results Locally...</source>
+        <translation>保存结果到本地...</translation>
+    </message>
+    <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="607"/>
         <source>Error</source>
         <translation>错误</translation>
@@ -3074,6 +3104,16 @@ This action cannot be undone.</source>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="663"/>
         <source>Cannot save, the calculation has failed or contains errors.</source>
         <translation>无法保存，计算失败或包含错误。</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="663"/>
+        <source>No completed kinetics fit is available to save. Please calculate first.</source>
+        <translation>没有可保存的已完成动力学拟合结果。请先计算。</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="663"/>
+        <source>No completed kinetics fit is available to export. Please calculate first.</source>
+        <translation>没有可导出的已完成动力学拟合结果。请先计算。</translation>
     </message>
     <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="673"/>
@@ -3097,6 +3137,35 @@ This action cannot be undone.</source>
         <translation>保存到数据库时发生错误：{0}</translation>
     </message>
     <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="678"/>
+        <source>Select Kinetics Export Folder</source>
+        <translation>选择动力学导出文件夹</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="678"/>
+        <source>Local Export Complete</source>
+        <translation>本地导出完成</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="678"/>
+        <source>Kinetics fit report exported to:
+{0}</source>
+        <translation>动力学拟合报告已导出到：
+{0}</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="678"/>
+        <source>Local Export Failed</source>
+        <translation>本地导出失败</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="678"/>
+        <source>An error occurred while exporting kinetics results:
+{0}</source>
+        <translation>导出动力学结果时发生错误：
+{0}</translation>
+    </message>
+    <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="624"/>
         <source>Insufficient Data</source>
         <translation>数据不足</translation>
@@ -3118,8 +3187,8 @@ This action cannot be undone.</source>
     </message>
     <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="460"/>
-        <source>Selected association or dissociation region has fewer than 3 points. Please adjust the vertical markers.</source>
-        <translation>错误：选择的结合区或解离区数据点少于3个，无法拟合。</translation>
+        <source>Selected association or dissociation region has fewer than 4 points. Please adjust the vertical markers.</source>
+        <translation>选择的结合区或解离区少于 4 个数据点。请调整垂直标记。</translation>
     </message>
     <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_analysis_dialog.py" line="474"/>
@@ -3184,6 +3253,11 @@ This action cannot be undone.</source>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_window.py" line="1139"/>
         <source>Kinetics Analysis</source>
         <translation>动力学分析</translation>
+    </message>
+    <message>
+        <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_window.py" line="1139"/>
+        <source>Cancer Biomarker:</source>
+        <translation>癌症标记物:</translation>
     </message>
     <message>
         <location filename="../../../25.10.23 - ����/nanosense/gui/kinetics_window.py" line="1145"/>

@@ -6,6 +6,19 @@ from PyQt5.QtCore import QEvent  # 新增 QEvent
 import numpy as np
 
 
+def normalize_peak_metric_data(peak_data):
+    """Normalize peak table payloads while keeping legacy wavelength keys working."""
+    peak_data = peak_data or {}
+    positions = peak_data.get('positions', peak_data.get('wavelengths', []))
+    return {
+        'positions': list(positions),
+        'heights': list(peak_data.get('heights', [])),
+        'fwhms': list(peak_data.get('fwhms', [])),
+        'position_label': peak_data.get('position_label', 'Peak Wavelength (nm)'),
+        'fwhm_label': peak_data.get('fwhm_label', 'FWHM (nm)'),
+    }
+
+
 class PeakMetricsDialog(QDialog):
     """
     一个以表格形式显示所有峰值详细参数的对话框。
@@ -15,7 +28,7 @@ class PeakMetricsDialog(QDialog):
         super().__init__(parent)
         self.setGeometry(250, 250, 500, 300)
 
-        self.peak_data = peak_data  # 保存数据以便重新翻译
+        self.peak_data = normalize_peak_metric_data(peak_data)  # 保存数据以便重新翻译
 
         self._init_ui()
         self._retranslate_ui()  # 设置初始文本
@@ -52,9 +65,9 @@ class PeakMetricsDialog(QDialog):
         """
         self.setWindowTitle(self.tr("Peak Metrics"))
         self.table.setHorizontalHeaderLabels([
-            self.tr("Peak Wavelength (nm)"),
+            self.tr(self.peak_data.get('position_label', "Peak Wavelength (nm)")),
             self.tr("Peak Intensity"),
-            self.tr("FWHM (nm)")
+            self.tr(self.peak_data.get('fwhm_label', "FWHM (nm)"))
         ])
         self.button_box.button(QDialogButtonBox.Ok).setText(self.tr("OK"))
 
@@ -63,13 +76,13 @@ class PeakMetricsDialog(QDialog):
         if not self.peak_data:
             return
 
-        self.table.setRowCount(len(self.peak_data['wavelengths']))
+        self.table.setRowCount(len(self.peak_data['positions']))
 
-        for i, (wl, height, fwhm) in enumerate(zip(
-                self.peak_data['wavelengths'],
+        for i, (position, height, fwhm) in enumerate(zip(
+                self.peak_data['positions'],
                 self.peak_data['heights'],
                 self.peak_data['fwhms']
         )):
-            self.table.setItem(i, 0, QTableWidgetItem(f"{wl:.4f}"))
+            self.table.setItem(i, 0, QTableWidgetItem(f"{position:.4f}"))
             self.table.setItem(i, 1, QTableWidgetItem(f"{height:.4f}"))
             self.table.setItem(i, 2, QTableWidgetItem(f"{fwhm:.4f}"))

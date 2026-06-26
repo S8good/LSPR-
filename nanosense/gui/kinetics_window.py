@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QFormLayout,
     QDoubleSpinBox,
+    QComboBox,
 )
 from PyQt5.QtCore import pyqtSignal, QEvent
 from PyQt5.QtGui import QIcon
@@ -23,6 +24,9 @@ from .collapsible_box import CollapsibleBox
 from .kinetics_analysis_dialog import KineticsAnalysisDialog
 from .drift_correction_dialog import DriftCorrectionDialog
 from .single_plot_window import SinglePlotWindow
+from ..core.kinetics_metadata import CANCER_BIOMARKERS
+from ..utils.config_manager import load_settings
+from ..utils.plot_theme import apply_plot_theme, get_plot_theme
 
 
 class SummaryPopoutWindow(QMainWindow):
@@ -55,6 +59,7 @@ class SummaryPopoutWindow(QMainWindow):
         InteractivePlotEnhancer(self.plot_widget)
         self.plot_widget.addLegend()
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        apply_plot_theme(self.plot_widget, load_settings().get("theme", "dark"))
         self.plot_widget.getViewBox().sigStateChanged.connect(self._on_view_interacted)
 
         main_layout.addLayout(toolbar_layout)
@@ -110,8 +115,10 @@ class SummaryPopoutWindow(QMainWindow):
 
     def _retranslate_ui(self):
         translated_title = self.tr(self.window_title_source)
+        palette = get_plot_theme(load_settings().get("theme", "dark"))
         self.setWindowTitle(translated_title)
-        self.plot_widget.setTitle(translated_title, color="#90A4AE", size="12pt")
+        self.plot_widget.setTitle(translated_title, color=palette.title, size="12pt")
+        apply_plot_theme(self.plot_widget, palette.name)
         self.reset_button.setText(self.tr("Reset View"))
 
     def closeEvent(self, event):
@@ -184,6 +191,12 @@ class KineticsWindow(QMainWindow):
         baseline_form.setSpacing(6)
         baseline_form.setContentsMargins(0, 0, 0, 0)
 
+        self.biomarker_label = QLabel()
+        self.biomarker_combo = QComboBox()
+        for biomarker in CANCER_BIOMARKERS:
+            self.biomarker_combo.addItem(biomarker["label"], dict(biomarker))
+        baseline_form.addRow(self.biomarker_label, self.biomarker_combo)
+
         self.baseline_spinbox = QDoubleSpinBox()
         self.baseline_spinbox.setDecimals(3)
         self.baseline_spinbox.setRange(0.0, 2000.0)
@@ -248,7 +261,7 @@ class KineticsWindow(QMainWindow):
             symbol='o',
             symbolSize=6,
             symbolBrush='#F06292',
-            name='Kinetics'
+            name='Peak Wavelength'
         )
         (self.sensor_container,
          self.sensor_title_label,
@@ -406,57 +419,18 @@ class KineticsWindow(QMainWindow):
         """更新所有弹出按钮的图标"""
         # 更新所有图表的弹出按钮图标
         try:
-            if hasattr(self, 'summary_popout_button'):
-                self._update_popout_button_icon(self.summary_popout_button)
             if hasattr(self, 'sensor_popout_button'):
                 self._update_popout_button_icon(self.sensor_popout_button)
             if hasattr(self, 'peak_shift_popout_button'):
                 self._update_popout_button_icon(self.peak_shift_popout_button)
-            if hasattr(self, 'noise_popout_button'):
-                self._update_popout_button_icon(self.noise_popout_button)
+            if hasattr(self, 'comparison_popout_button'):
+                self._update_popout_button_icon(self.comparison_popout_button)
         except Exception:
             pass  # 忽略错误
 
     def _style_plot(self, plot_widget):
-        # 获取当前主题设置
-        try:
-            from ..utils.config_manager import load_settings
-            settings = load_settings()
-            theme = settings.get('theme', 'dark')
-            
-            # 根据主题设置不同的背景色和样式
-            if theme == 'light':
-                plot_widget.setBackground("#F0F0F0")  # 偏暗的浅色背景
-                axis_pen = pg.mkPen("#000000", width=1)  # 坐标轴使用黑色
-                text_pen = pg.mkPen("#000000")  # 坐标文本使用黑色
-                grid_alpha = 0.15
-                border_pen = pg.mkPen("#CED4DA", width=1)
-            else:
-                plot_widget.setBackground("#1F2735")  # 深色背景
-                axis_pen = pg.mkPen("#4D5A6D", width=1)
-                text_pen = pg.mkPen("#E2E8F0")
-                grid_alpha = 0.15
-                border_pen = pg.mkPen("#39475A", width=1)
-                
-            for axis in ("left", "bottom"):
-                ax = plot_widget.getPlotItem().getAxis(axis)
-                ax.setPen(axis_pen)
-                ax.setTextPen(text_pen)
-                ax.setStyle(tickLength=6)
-            plot_widget.getPlotItem().showGrid(x=True, y=True, alpha=grid_alpha)
-            plot_widget.getViewBox().setBorder(border_pen)
-        except Exception:
-            # 如果无法加载设置，使用默认样式
-            plot_widget.setBackground("#1F2735")
-            axis_pen = pg.mkPen("#4D5A6D", width=1)
-            text_pen = pg.mkPen("#E2E8F0")
-            for axis in ("left", "bottom"):
-                ax = plot_widget.getPlotItem().getAxis(axis)
-                ax.setPen(axis_pen)
-                ax.setTextPen(text_pen)
-                ax.setStyle(tickLength=6)
-            plot_widget.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
-            plot_widget.getViewBox().setBorder(pg.mkPen("#39475A", width=1))
+        theme = load_settings().get('theme', 'dark')
+        apply_plot_theme(plot_widget, theme)
 
     def _apply_theme(self):
         # 根据主题设置不同的样式
@@ -854,6 +828,13 @@ CollapsibleBox > QToolButton:hover {
             """)
         # 更新所有弹出按钮的图标
         self._update_all_popout_icons()
+        theme = load_settings().get('theme', 'dark')
+        for plot in (self.sensorgram_plot, self.peak_shift_plot, self.comparison_plot):
+            apply_plot_theme(plot, theme)
+        for entry in list(self._popout_windows):
+            window = entry.get("window")
+            if hasattr(window, "plot_widget"):
+                apply_plot_theme(window.plot_widget, theme)
 
     # --- Reset helpers --------------------------------------------------
     def _reset_sensorgram_view(self):
@@ -1061,8 +1042,19 @@ CollapsibleBox > QToolButton:hover {
     def _open_kinetics_analysis_dialog(self):
         if len(self.kinetics_time_data) < 5:
             return
-        dialog = KineticsAnalysisDialog(self.kinetics_time_data, self.kinetics_wavelength_data, self.main_window)
+        dialog = KineticsAnalysisDialog(
+            self.kinetics_time_data,
+            self.kinetics_wavelength_data,
+            self.main_window,
+            biomarker=self.selected_biomarker(),
+        )
         dialog.exec_()
+
+    def selected_biomarker(self):
+        biomarker = self.biomarker_combo.currentData()
+        if not isinstance(biomarker, dict):
+            return dict(CANCER_BIOMARKERS[0])
+        return dict(biomarker)
 
     def update_kinetics_data(self, data_package):
         """更新动力学监测数据
@@ -1074,10 +1066,6 @@ CollapsibleBox > QToolButton:hover {
         elapsed_time = data_package.get("elapsed_time")
         peak_wl = data_package.get("peak_wl")
         
-        # DEBUG: 检查接收的数据范围
-        if result_y is not None:
-            print(f"DEBUG: 接收数据 Y值范围: min={np.min(result_y):.4f}, max={np.max(result_y):.4f}, len={len(result_y)}")
-
         # 捕获基线光谱（仅在开始时，第一次数据到达时）
         if self.baseline_spectrum_x is None and result_x is not None and result_y is not None:
             self.baseline_spectrum_x = np.array(result_x, copy=True)
@@ -1096,27 +1084,19 @@ CollapsibleBox > QToolButton:hover {
             else:
                 print(f"基线光谱已捕获，波长范围: {self.baseline_spectrum_x[0]:.1f}-{self.baseline_spectrum_x[-1]:.1f} nm")
             
-            # DEBUG: 检查主窗口属性
-            print(f"DEBUG: main_window存在: {self.main_window is not None}")
-            
             # 获取measurement_widget (可能是main_window本身或其子组件)
             measurement_widget = None
             if hasattr(self.main_window, 'analysis_start_spinbox'):
                 measurement_widget = self.main_window
             elif hasattr(self.main_window, 'measurement_page'):
                 measurement_widget = self.main_window.measurement_page
-            
-            print(f"DEBUG: measurement_widget存在: {measurement_widget is not None}")
-            
+
             # 初始设置X轴范围为分析范围
             if measurement_widget and hasattr(measurement_widget, 'analysis_start_spinbox') and hasattr(measurement_widget, 'analysis_end_spinbox'):
                 analysis_start = measurement_widget.analysis_start_spinbox.value()
                 analysis_end = measurement_widget.analysis_end_spinbox.value()
-                print(f"DEBUG: 分析范围值 = {analysis_start} - {analysis_end}")
                 self.comparison_plot.setXRange(analysis_start, analysis_end, padding=0.02)
                 print(f"光谱对比图X轴范围设置为: {analysis_start:.1f}-{analysis_end:.1f} nm")
-            else:
-                print("DEBUG: 无法获取分析范围spinbox")
         
         # 更新实时光谱
         if result_x is not None and result_y is not None:
@@ -1215,6 +1195,7 @@ CollapsibleBox > QToolButton:hover {
         self.setWindowTitle(self.tr("Real-time Kinetics Analysis"))
 
         self.kinetics_box.toggle_button.setText(self.tr("Kinetics Analysis"))
+        self.biomarker_label.setText(self.tr("Cancer Biomarker:"))
         self.apply_baseline_button.setText(self.tr("Apply Baseline"))
         self.clear_baseline_button.setText(self.tr("Clear Baseline"))
         self.baseline_spinbox.setSuffix(" " + self.tr("nm"))
@@ -1227,17 +1208,22 @@ CollapsibleBox > QToolButton:hover {
         self.reset_shift_button.setText(self.tr("Reset Peak Shift View"))
         self.reset_comparison_button.setText(self.tr("Reset Comparison View"))
 
-        self.sensorgram_plot.setTitle(self.tr("Kinetics Curve (Sensorgram)"), color="#90A4AE", size="12pt")
+        palette = get_plot_theme(load_settings().get("theme", "dark"))
+
+        self.sensorgram_plot.setTitle(self.tr("Kinetics Curve (Sensorgram)"), color=palette.title, size="12pt")
         self.sensorgram_plot.setLabel("bottom", self.tr("Time (s)"))
         self.sensorgram_plot.setLabel("left", self.tr("Peak Wavelength (nm)"))
 
-        self.peak_shift_plot.setTitle(self.tr("Peak Wavelength Shift"), color="#90A4AE", size="12pt")
+        self.peak_shift_plot.setTitle(self.tr("Peak Wavelength Shift"), color=palette.title, size="12pt")
         self.peak_shift_plot.setLabel("bottom", self.tr("Time (s)"))
         self.peak_shift_plot.setLabel("left", self.tr("Shift (nm)"))
 
-        self.comparison_plot.setTitle(self.tr("Spectrum Comparison (Baseline vs Real-time)"), color="#90A4AE", size="12pt")
+        self.comparison_plot.setTitle(self.tr("Spectrum Comparison (Baseline vs Real-time)"), color=palette.title, size="12pt")
         self.comparison_plot.setLabel("bottom", self.tr("Wavelength (nm)"))
         self.comparison_plot.setLabel("left", self.tr("Absorbance"))
+
+        for plot in (self.sensorgram_plot, self.peak_shift_plot, self.comparison_plot):
+            apply_plot_theme(plot, palette.name)
 
         self.sensor_title_label.setText(self.tr("Kinetics Curve (Sensorgram)"))
         self.peak_shift_title_label.setText(self.tr("Peak Wavelength Shift"))

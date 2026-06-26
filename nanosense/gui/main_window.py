@@ -42,6 +42,11 @@ from ..core.spectrum_processor import SpectrumProcessor
 from ..core.batch_acquisition import BatchRunDialog, BatchAcquisitionWorker
 from ..core.database_manager import DatabaseManager
 from ..utils.config_manager import load_settings, save_settings
+from ..utils.plot_theme import (
+    apply_plot_theme,
+    apply_plot_theme_to_widget_tree,
+    configure_pyqtgraph_theme,
+)
 
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTranslator
 
@@ -487,6 +492,7 @@ class AppWindow(QMainWindow):
         
         # 检查当前主题设置
         theme = self.app_settings.get('theme', 'dark')
+        configure_pyqtgraph_theme(theme)
         
         if theme == 'light':
             # 改进的浅色主题样式表
@@ -989,6 +995,7 @@ class AppWindow(QMainWindow):
 
         # 更新测量页面的图标和背景
         self._update_measurement_page_theme()
+        apply_plot_theme_to_widget_tree(self, theme)
 
     def closeEvent(self, event):
         """关闭事件处理"""
@@ -1029,6 +1036,7 @@ class AppWindow(QMainWindow):
     def _update_measurement_page_theme(self):
         """更新测量页面的主题相关元素"""
         try:
+            theme = self.app_settings.get('theme', 'dark')
             # 更新测量页面的图标和背景
             if hasattr(self, 'measurement_page') and self.measurement_page:
                 # 更新弹出按钮图标
@@ -1041,14 +1049,13 @@ class AppWindow(QMainWindow):
                 self.measurement_page.kinetics_window._update_all_popout_icons()
                 # 更新动力学窗口中所有图表的样式
                 for plot in [
-                    self.measurement_page.kinetics_window.summary_plot,
                     self.measurement_page.kinetics_window.sensorgram_plot,
                     self.measurement_page.kinetics_window.peak_shift_plot,
-                    self.measurement_page.kinetics_window.noise_trend_plot
+                    self.measurement_page.kinetics_window.comparison_plot,
                 ]:
-                    self.measurement_page.kinetics_window._style_plot(plot)
-        except Exception:
-            pass  # 忽略错误
+                    apply_plot_theme(plot, theme)
+        except Exception as exc:
+            print(f"更新测量页面主题时出错: {exc}")
     def _persist_imported_spectra(self, base_label: str, spectra_entries: List[Dict[str, Any]], import_context: Dict[str, Any]):
         """持久化导入的光谱数据"""
         if not self.db_manager or not spectra_entries:

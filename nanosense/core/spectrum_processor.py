@@ -78,16 +78,24 @@ class SpectrumProcessor(QObject):
 
     def set_background(self):
         """将最新的信号光谱存储为背景光谱。"""
-        if self.latest_signal_spectrum is not None:
-            self.background_spectrum = self.latest_signal_spectrum.copy()
+        self.set_background_from_spectrum(self.latest_signal_spectrum)
+
+    def set_background_from_spectrum(self, spectrum):
+        """将指定光谱存储为背景光谱。"""
+        if spectrum is not None:
+            self.background_spectrum = np.array(spectrum, copy=True)
             print("背景光谱已更新。")
             self.background_updated.emit(self.wavelengths, self.background_spectrum)
             self.process_and_emit()
 
     def set_reference(self):
         """将最新的信号光谱存储为参考光谱。"""
-        if self.latest_signal_spectrum is not None:
-            self.reference_spectrum = self.latest_signal_spectrum.copy()
+        self.set_reference_from_spectrum(self.latest_signal_spectrum)
+
+    def set_reference_from_spectrum(self, spectrum):
+        """将指定光谱存储为参考光谱。"""
+        if spectrum is not None:
+            self.reference_spectrum = np.array(spectrum, copy=True)
             print("参考光谱已更新。")
             self.reference_updated.emit(self.wavelengths, self.reference_spectrum)
             self.process_and_emit()

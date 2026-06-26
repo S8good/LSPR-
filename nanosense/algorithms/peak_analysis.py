@@ -387,10 +387,20 @@ def calculate_raman_shift(wavelengths, excitation_wavelength):
     【计算拉曼位移】
     将波长转换为拉曼位移（cm⁻¹）。
     """
-    lambda_exc = excitation_wavelength * 1e-7  # 转换为cm
-    lambda_em = wavelengths * 1e-7  # 转换为cm
-    raman_shift = 10000 * (1/lambda_exc - 1/lambda_em)
-    return raman_shift
+    emission_nm = np.asarray(wavelengths, dtype=float)
+    excitation_nm = float(excitation_wavelength)
+    return 1e7 / excitation_nm - 1e7 / emission_nm
+
+
+def raman_shift_to_wavelength(raman_shifts, excitation_wavelength):
+    """
+    【拉曼位移反算波长】
+    将拉曼位移（cm⁻¹）转换为散射/发射波长（nm）。
+    """
+    shifts_cm = np.asarray(raman_shifts, dtype=float)
+    excitation_nm = float(excitation_wavelength)
+    denominator = 1e7 / excitation_nm - shifts_cm
+    return 1e7 / denominator
 
 
 def identify_raman_peaks(wavenumbers, intensities, min_height=None, min_distance=None):

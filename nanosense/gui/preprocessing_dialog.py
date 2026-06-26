@@ -14,6 +14,8 @@ from nanosense.algorithms.preprocessing import (
     smooth_moving_average,
     smooth_median
 )
+from nanosense.utils.config_manager import load_settings
+from nanosense.utils.plot_theme import apply_plot_theme, get_plot_theme
 
 
 
@@ -217,7 +219,8 @@ class PreprocessingDialog(QDialog):
         self.button_box.button(QDialogButtonBox.Ok).setText(self.tr("OK"))
         self.button_box.button(QDialogButtonBox.Cancel).setText(self.tr("Cancel"))
 
-        self.plot_widget.setTitle(self.tr("Preprocessing Effect Preview"))
+        palette = get_plot_theme(load_settings().get('theme', 'dark'))
+        self.plot_widget.setTitle(self.tr("Preprocessing Effect Preview"), color=palette.title, size="12pt")
 
         # 移除对 self.plot_widget.legend 的直接访问
         self.plot_widget.clear()  # 先清空图表中的所有项目（曲线等）
@@ -232,6 +235,7 @@ class PreprocessingDialog(QDialog):
                                                     pen=self.baseline_pen)
         self.processed_curve = self.plot_widget.plot(name=self.tr("Processed Spectrum"), pen=self.processed_pen)
 
+        self._apply_plot_theme()
         self._update_plot()  # 调用一次更新，确保所有曲线都有正确的数据
 
     def _populate_initial_values(self):
@@ -368,40 +372,21 @@ class PreprocessingDialog(QDialog):
         return self.params
 
     def _apply_plot_theme(self):
-        from ..utils.config_manager import load_settings
         settings = load_settings()
         theme = settings.get('theme', 'dark')
         if theme == 'light':
-            self.plot_widget.setBackground('#f5f5f5')
-            axis_pen = pg.mkPen('#111827', width=1)
-            text_pen = pg.mkPen('#111827')
             self.raw_pen = pg.mkPen('#4b5563')
             self.baseline_pen = pg.mkPen('#b45309', style=Qt.DashLine)
             self.processed_pen = pg.mkPen('#15803d', width=2)
         else:
-            self.plot_widget.setBackground('#1F2735')
-            axis_pen = pg.mkPen('#4D5A6D', width=1)
-            text_pen = pg.mkPen('#E2E8F0')
             self.raw_pen = pg.mkPen('w')
             self.baseline_pen = pg.mkPen('y', style=Qt.DashLine)
             self.processed_pen = pg.mkPen('g', width=2)
 
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.2 if theme == 'light' else 0.3)
-        for axis in ("left", "bottom"):
-            ax = self.plot_widget.getPlotItem().getAxis(axis)
-            ax.setPen(axis_pen)
-            ax.setTextPen(text_pen)
+        apply_plot_theme(self.plot_widget, theme)
         if hasattr(self, "raw_curve"):
             self.raw_curve.setPen(self.raw_pen)
         if hasattr(self, "baseline_curve"):
             self.baseline_curve.setPen(self.baseline_pen)
         if hasattr(self, "processed_curve"):
             self.processed_curve.setPen(self.processed_pen)
-
-        # 更新图例文字颜色
-        legend = self.plot_widget.getPlotItem().legend
-        if legend:
-            text_color = '#000000' if theme == 'light' else '#E2E8F0'
-            for item in legend.items:
-                label = item[1]  # item is a tuple (sample, label)
-                label.setText(label.text, color=text_color)

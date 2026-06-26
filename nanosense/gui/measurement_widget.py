@@ -4,6 +4,7 @@ from .peak_metrics_dialog import PeakMetricsDialog
 from .collapsible_box import CollapsibleBox
 from .kinetics_window import KineticsWindow
 from .single_plot_window import SinglePlotWindow
+from collections import deque
 import time
 import numpy as np
 import queue
@@ -26,6 +27,8 @@ from nanosense.algorithms.peak_analysis import (
     PEAK_METHOD_KEYS,
     PEAK_METHOD_LABELS,
     estimate_peak_position,
+    calculate_raman_shift,
+    raman_shift_to_wavelength,
     calculate_sers_enhancement_factor,
 )
 from nanosense.algorithms.raman_database import (
@@ -34,8 +37,15 @@ from nanosense.algorithms.raman_database import (
     get_raman_substance_info,
     get_all_raman_substances,
 )
+from nanosense.core.realtime_processing import (
+    REALTIME_RESULT_UPDATE_INTERVAL_S,
+    should_process_realtime_result,
+)
+from nanosense.core.raman_workflow import build_raman_workflow_steps
 from nanosense.core.controller import FX2000Controller
 from nanosense.utils.file_io import save_spectrum, load_spectrum, save_all_spectra_to_file
+from nanosense.utils.config_manager import load_settings
+from nanosense.utils.plot_theme import apply_plot_theme, get_plot_theme, set_plot_legend_visible
 from nanosense.core.spectrum_processor import SpectrumProcessor
 
 class MeasurementWidget(QWidget):
@@ -51,8 +61,14 @@ class MeasurementWidget(QWidget):
         self.mode_name = "N/A"
         self.wavelengths = np.array(self.controller.wavelengths if self.controller else [])
         self.data_queue = queue.Queue(maxsize=10)
+        self.background_reference_average_count = 10
+        self.recent_signal_frames = deque(maxlen=self.background_reference_average_count)
         self.stop_event = threading.Event()
         self.acquisition_thread = None
+        self.acquisition_error_backoff_s = 0.05
+        self.acquisition_idle_sleep_s = 0.1
+        self._last_acquisition_error_message = None
+        self._acquisition_error_repeat_count = 0
 
         self.is_kinetics_monitoring = False
         self.kinetics_start_time = None
@@ -65,6 +81,10 @@ class MeasurementWidget(QWidget):
         # --- 用于存储完整的、未经裁剪的结果光谱 ---
         self.full_result_x = None
         self.full_result_y = None
+        self.latest_peak_metrics = None
+        self.raman_workflow_saved = False
+        self.last_result_processing_time = None
+        self.result_processing_interval_s = REALTIME_RESULT_UPDATE_INTERVAL_S
 
         # --- 用于存储所有弹出的独立窗口 ---
         self.popout_windows = []
@@ -75,6 +95,7 @@ class MeasurementWidget(QWidget):
 
         self.init_ui()
         self.connect_signals()
+        self._apply_current_hardware_settings()
 
         self.processor.result_updated.connect(self._on_result_updated)
         self.processor.background_updated.connect(self._on_background_updated)
@@ -174,6 +195,8 @@ class MeasurementWidget(QWidget):
         acq_layout.addWidget(self.raman_group)
         self.acq_box.setContentLayout(acq_layout)
         panel_layout.addWidget(self.acq_box)
+
+        self._create_raman_workflow_panel(panel_layout)
 
         # --- 显示范围控制已移除，统一到参数与预处理中的分析范围 ---
 
@@ -543,6 +566,143 @@ class MeasurementWidget(QWidget):
         scroll_area.setWidget(panel_widget)
         return scroll_area
 
+    def _create_raman_workflow_panel(self, panel_layout):
+        self.raman_workflow_box = CollapsibleBox(self.tr("Raman Workflow"))
+        workflow_layout = QVBoxLayout()
+        workflow_layout.setSpacing(8)
+
+        self.raman_workflow_status_labels = {}
+        self.raman_workflow_buttons = {}
+
+        self.workflow_capture_background_button = QPushButton(self.tr("1. Capture Background"))
+        self.workflow_enable_laser_button = QPushButton(self.tr("2. Enable Laser"))
+        self.workflow_acquire_sample_button = QPushButton(self.tr("3. Acquire Sample"))
+        self.workflow_find_peaks_button = QPushButton(self.tr("4. Convert & Find Peaks"))
+        self.workflow_save_result_button = QPushButton(self.tr("5. Save Result"))
+
+        step_widgets = [
+            ("background", self.workflow_capture_background_button, self._workflow_capture_background),
+            ("laser", self.workflow_enable_laser_button, self._workflow_enable_laser),
+            ("sample", self.workflow_acquire_sample_button, self._workflow_acquire_sample),
+            ("peaks", self.workflow_find_peaks_button, self._workflow_find_peaks),
+            ("save", self.workflow_save_result_button, self._workflow_save_result),
+        ]
+
+        for key, button, handler in step_widgets:
+            row_layout = QGridLayout()
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setColumnStretch(0, 1)
+
+            status_label = QLabel(self.tr("Waiting"))
+            status_label.setAlignment(Qt.AlignCenter)
+            status_label.setMinimumWidth(78)
+
+            button.clicked.connect(handler)
+            row_layout.addWidget(button, 0, 0)
+            row_layout.addWidget(status_label, 0, 1)
+            workflow_layout.addLayout(row_layout)
+
+            self.raman_workflow_buttons[key] = button
+            self.raman_workflow_status_labels[key] = status_label
+
+        self.raman_workflow_box.setContentLayout(workflow_layout)
+        self.raman_workflow_box.set_expanded(True)
+        self.raman_workflow_box.hide()
+        panel_layout.addWidget(self.raman_workflow_box)
+
+    def _workflow_status_display(self, status):
+        status_map = {
+            "done": (
+                self.tr("Done"),
+                "QLabel { background-color: #16a34a; color: white; padding: 2px 6px; border-radius: 4px; }",
+            ),
+            "pending": (
+                self.tr("Ready"),
+                "QLabel { background-color: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; }",
+            ),
+            "blocked": (
+                self.tr("Waiting"),
+                "QLabel { background-color: #64748b; color: white; padding: 2px 6px; border-radius: 4px; }",
+            ),
+        }
+        return status_map.get(
+            status,
+            (
+                self.tr("Waiting"),
+                "QLabel { background-color: #64748b; color: white; padding: 2px 6px; border-radius: 4px; }",
+            ),
+        )
+
+    def _refresh_raman_workflow(self):
+        if not hasattr(self, 'raman_workflow_box'):
+            return
+
+        is_raman = self.mode_name == "Raman"
+        self.raman_workflow_box.setVisible(is_raman)
+        if not is_raman:
+            return
+
+        steps = build_raman_workflow_steps(
+            background_ready=self.processor.background_spectrum is not None,
+            laser_enabled=bool(self.laser_button.isChecked()),
+            acquisition_running=bool(self.is_acquiring),
+            result_ready=self.full_result_y is not None,
+            peaks_ready=bool(getattr(self, 'latest_peak_metrics', None)),
+            saved=bool(getattr(self, 'raman_workflow_saved', False)),
+        )
+
+        for step in steps:
+            key = step["key"]
+            status_text, status_style = self._workflow_status_display(step["status"])
+            detail = self.tr(step["detail"])
+
+            status_label = self.raman_workflow_status_labels.get(key)
+            if status_label:
+                status_label.setText(status_text)
+                status_label.setStyleSheet(status_style)
+                status_label.setToolTip(detail)
+
+            button = self.raman_workflow_buttons.get(key)
+            if button:
+                button.setEnabled(bool(step["action_enabled"]))
+                button.setToolTip(detail)
+
+    def _workflow_capture_background(self):
+        self._capture_background_average()
+        if self.processor.background_spectrum is not None:
+            self.raman_workflow_saved = False
+        self._refresh_raman_workflow()
+
+    def _workflow_enable_laser(self):
+        if not self.laser_button.isChecked():
+            self.laser_button.click()
+        self._refresh_raman_workflow()
+
+    def _workflow_acquire_sample(self):
+        if self.processor.background_spectrum is None or not self.laser_button.isChecked():
+            self._refresh_raman_workflow()
+            return
+        self._toggle_acquisition(True)
+        self.raman_workflow_saved = False
+        self._refresh_raman_workflow()
+
+    def _workflow_find_peaks(self):
+        if self.mode_name != "Raman":
+            self._refresh_raman_workflow()
+            return
+        if hasattr(self, 'wavenumber_toggle') and not self.wavenumber_toggle.isChecked():
+            self.wavenumber_toggle.setChecked(True)
+            self._toggle_wavelength_wavenumber()
+        if self.full_result_y is not None:
+            self._find_all_peaks()
+        self._refresh_raman_workflow()
+
+    def _workflow_save_result(self):
+        file_path = self._save_result_spectrum()
+        if file_path:
+            self.raman_workflow_saved = True
+        self._refresh_raman_workflow()
+
     def _create_plots_widget(self):
         plots_container = QWidget()
         plots_container.setObjectName("plotsContainer")
@@ -564,7 +724,8 @@ class MeasurementWidget(QWidget):
             header_layout.setContentsMargins(5, 2, 5, 2)
 
             title_label = QLabel(self.tr(title_key))
-            title_label.setStyleSheet("color: #90A4AE; font-size: 12pt;")
+            palette = get_plot_theme(load_settings().get('theme', 'dark'))
+            title_label.setStyleSheet(f"color: {palette.title}; font-size: 12pt;")
 
             popout_button = QToolButton()
             # 根据当前主题选择合适的图标
@@ -581,6 +742,7 @@ class MeasurementWidget(QWidget):
 
             plot_widget.setTitle("")
             plot_widget.showGrid(x=True, y=True, alpha=0.3)
+            apply_plot_theme(plot_widget, palette.name)
 
             return container, title_label
 
@@ -608,6 +770,10 @@ class MeasurementWidget(QWidget):
         self.reference_plot.addLegend()
         self.reference_enhancer.setup_legend_toggle()  # 添加图例后调用，确保图例位于右上角
         self.reference_curve = self.reference_plot.plot(pen=pg.mkPen('#2ca02c', width=2), name='Reference')  # 绿色参考光谱
+
+        # 顶部三张小图已有外部标题，隐藏内部图例以避免遮挡峰顶曲线。
+        for plot in (self.signal_plot, self.background_plot, self.reference_plot):
+            set_plot_legend_visible(plot, False)
         
         self.result_plot = pg.PlotWidget()
         optimize_plot_performance(self.result_plot)  # 启用降采样以获得更好的性能
@@ -664,9 +830,45 @@ class MeasurementWidget(QWidget):
 
         return plots_container
 
+    def _is_raman_wavenumber_display(self):
+        return (
+            self.mode_name == "Raman"
+            and hasattr(self, 'wavenumber_toggle')
+            and self.wavenumber_toggle.isChecked()
+        )
+
+    def _to_current_result_axis(self, wavelengths):
+        if not self._is_raman_wavenumber_display():
+            return wavelengths
+        excitation_wavelength = self.excitation_wavelength_spinbox.value()
+        return self.wavelength_to_raman_shift(wavelengths, excitation_wavelength)
+
+    def _peak_axis_labels(self):
+        if self._is_raman_wavenumber_display():
+            return self.tr("Peak Wavenumber (cm^-1)"), self.tr("FWHM (cm^-1)")
+        return self.tr("Peak Wavelength (nm)"), self.tr("FWHM (nm)")
+
+    def _peak_axis_key(self):
+        return 'raman_shift_cm^-1' if self._is_raman_wavenumber_display() else 'wavelength_nm'
+
+    def _cache_peak_metrics(self, positions, intensities, fwhms):
+        self.latest_peak_metrics = {
+            'axis': self._peak_axis_key(),
+            'peaks': [
+                {
+                    'position': float(position),
+                    'intensity': float(intensity),
+                    'fwhm': float(fwhm),
+                }
+                for position, intensity, fwhm in zip(positions, intensities, fwhms)
+            ],
+        }
+        self.raman_workflow_saved = False
+
     def _find_all_peaks(self):
         if self.full_result_y is None:
             print(self.tr("Peak finding failed: No valid data in the result plot."))
+            self._refresh_raman_workflow()
             return
 
         x_data, y_data = self.full_result_x, self.full_result_y
@@ -678,6 +880,8 @@ class MeasurementWidget(QWidget):
         if len(region_indices) < 3:
             print(self.tr("Too few data points in the selected region to find peaks."))
             self.peak_markers.clear()
+            self.latest_peak_metrics = None
+            self._refresh_raman_workflow()
             return
 
         start_index = region_indices[0]
@@ -686,19 +890,30 @@ class MeasurementWidget(QWidget):
 
         if indices_subset.any():
             indices_global = indices_subset + start_index
-            peak_x = x_data[indices_global]
+            display_x_data = self._to_current_result_axis(x_data)
+            peak_x = display_x_data[indices_global]
             peak_y = y_data[indices_global]
-            fwhms = calculate_fwhm(x_data, y_data, indices_global)
+            fwhms = calculate_fwhm(display_x_data, y_data, indices_global)
 
             self.peak_markers.setData(peak_x, peak_y)
             print(self.tr("Found {0} peaks in the selected region.").format(len(indices_global)))
 
-            peak_data_for_table = {'wavelengths': peak_x, 'heights': peak_y, 'fwhms': fwhms}
+            position_label, fwhm_label = self._peak_axis_labels()
+            self._cache_peak_metrics(peak_x, peak_y, fwhms)
+            peak_data_for_table = {
+                'positions': peak_x,
+                'heights': peak_y,
+                'fwhms': fwhms,
+                'position_label': position_label,
+                'fwhm_label': fwhm_label,
+            }
             dialog = PeakMetricsDialog(peak_data_for_table, self)
             dialog.exec_()
         else:
             self.peak_markers.clear()
+            self.latest_peak_metrics = None
             print(self.tr("No peaks found with the current settings in the selected region."))
+        self._refresh_raman_workflow()
 
     def _find_main_resonance_peak(self):
         if self.full_result_y is None:
@@ -730,13 +945,15 @@ class MeasurementWidget(QWidget):
 
         if main_peak_index_subset is not None:
             main_peak_index_global = main_peak_index_subset + start_index
-            peak_x = x_data[main_peak_index_global]
+            display_x_data = self._to_current_result_axis(x_data)
+            peak_x = display_x_data[main_peak_index_global]
             peak_y = y_data[main_peak_index_global]
 
             self.main_peak_marker.setData([peak_x], [peak_y])
             self.main_peak_wavelength_label.setText(f"{peak_x:.4f}")
             self.main_peak_intensity_label.setText(f"{peak_y:.4f}")
-            print(self.tr("Found main resonance peak @ {0:.2f} nm, Intensity: {1:.2f}").format(peak_x, peak_y))
+            axis_unit = "cm^-1" if self._is_raman_wavenumber_display() else "nm"
+            print(self.tr("Found main resonance peak @ {0:.2f} {1}, Intensity: {2:.2f}").format(peak_x, axis_unit, peak_y))
         else:
             self.main_peak_marker.clear()
             self.main_peak_wavelength_label.setText(self.tr("Not Found"))
@@ -747,9 +964,10 @@ class MeasurementWidget(QWidget):
         self.processor.background_updated.connect(self.update_background_plot)
         self.processor.reference_updated.connect(self.update_reference_plot)
         self.toggle_acq_button.clicked.connect(self._on_toggle_button_clicked)
-        self.capture_dark_button.clicked.connect(self.processor.set_background)
-        self.capture_ref_button.clicked.connect(self.processor.set_reference)
+        self.capture_dark_button.clicked.connect(self._capture_background_average)
+        self.capture_ref_button.clicked.connect(self._capture_reference_average)
         self.integration_time_spinbox.valueChanged.connect(self._on_integration_time_changed)
+        self.scans_to_average_spinbox.valueChanged.connect(self._on_scans_to_average_changed)
 
         # 连接统一的分析范围信号
         self.analysis_start_spinbox.valueChanged.connect(self._on_analysis_range_changed)
@@ -818,14 +1036,30 @@ class MeasurementWidget(QWidget):
         print(self.tr("A pop-out plot window has been closed."))
 
     def _build_instrument_metadata(self):
+        averaging = None
+        if hasattr(self, 'scans_to_average_spinbox'):
+            averaging = int(self.scans_to_average_spinbox.value())
+        elif self.controller:
+            averaging = getattr(self.controller, 'scans_to_average', None)
+
+        config = {
+            'spectrometer_name': getattr(self.controller, 'name', None) if self.controller else None,
+            'hardware_vendor': getattr(self.controller, 'hardware_vendor', None) if self.controller else None,
+            'mode': self.mode_name,
+        }
+        if self.mode_name == "Raman":
+            if hasattr(self, 'excitation_wavelength_spinbox'):
+                config['excitation_wavelength_nm'] = float(self.excitation_wavelength_spinbox.value())
+            if hasattr(self, 'laser_power_spinbox'):
+                config['laser_power_percent'] = float(self.laser_power_spinbox.value())
+            if hasattr(self, 'laser_button'):
+                config['laser_enabled'] = bool(self.laser_button.isChecked())
+
         info = {
             'device_serial': getattr(self.controller, 'serial_number', None) if self.controller else None,
             'integration_time_ms': float(self.integration_time_spinbox.value()) if hasattr(self, 'integration_time_spinbox') else None,
-            'averaging': getattr(self.controller, 'scans_to_average', None) if self.controller else None,
-            'config': {
-                'spectrometer_name': getattr(self.controller, 'name', None) if self.controller else None,
-                'mode': self.mode_name,
-            }
+            'averaging': averaging,
+            'config': config,
         }
         config = {key: value for key, value in info.get('config', {}).items() if value is not None}
         if config:
@@ -835,6 +1069,36 @@ class MeasurementWidget(QWidget):
         if all(info.get(key) is None for key in ('device_serial', 'integration_time_ms', 'averaging', 'temperature')) and 'config' not in info:
             return None
         return info
+
+    def _build_raman_processing_metadata(self):
+        peaks_payload = getattr(self, 'latest_peak_metrics', None)
+        peaks_summary = None
+        if peaks_payload:
+            peaks = list(peaks_payload.get('peaks', []))
+            peaks_summary = {
+                'axis': peaks_payload.get('axis'),
+                'count': len(peaks),
+                'items': peaks,
+            }
+
+        display_axis = (
+            'raman_shift_cm^-1'
+            if self.mode_name == "Raman"
+            and hasattr(self, 'wavenumber_toggle')
+            and self.wavenumber_toggle.isChecked()
+            else 'wavelength_nm'
+        )
+
+        metadata = {
+            'excitation_wavelength_nm': float(self.excitation_wavelength_spinbox.value()) if hasattr(self, 'excitation_wavelength_spinbox') else None,
+            'rayleigh_scattering_removal': self.rayleigh_remove_checkbox.isChecked() if hasattr(self, 'rayleigh_remove_checkbox') else None,
+            'rayleigh_cutoff_cm^-1': float(self.rayleigh_cutoff_spinbox.value()) if hasattr(self, 'rayleigh_cutoff_spinbox') else None,
+            'fluorescence_background_subtraction': self.fluorescence_subtract_checkbox.isChecked() if hasattr(self, 'fluorescence_subtract_checkbox') else None,
+            'normalization_method': self.normalization_combo.currentText() if hasattr(self, 'normalization_combo') else None,
+            'display_axis': display_axis,
+            'peaks': peaks_summary,
+        }
+        return {key: value for key, value in metadata.items() if value is not None}
 
     def _build_processing_metadata(self, spectrum_role=None):
         parameters = {
@@ -859,6 +1123,10 @@ class MeasurementWidget(QWidget):
         }
         if spectrum_role:
             parameters['spectrum_role'] = spectrum_role
+        if self.mode_name == "Raman":
+            raman_metadata = self._build_raman_processing_metadata()
+            if raman_metadata:
+                parameters['raman'] = raman_metadata
         parameters = {key: value for key, value in parameters.items() if value is not None}
         return {
             'name': 'measurement_widget',
@@ -874,7 +1142,7 @@ class MeasurementWidget(QWidget):
                 self.tr("Save Failed"),
                 self.tr("There is no valid data in the result plot to save.")
             )
-            return
+            return None
 
         full_x_data, full_y_data = self.full_result_x, self.full_result_y
         min_wl = self.analysis_start_spinbox.value()
@@ -949,6 +1217,10 @@ class MeasurementWidget(QWidget):
                 QMessageBox.warning(self, self.tr("Database Error"),
                                     self.tr("File saved, but an error occurred while syncing to the database:\n{0}")
                                     .format(str(e)))
+        if file_path and self.mode_name == "Raman" and hasattr(self, 'raman_workflow_saved'):
+            self.raman_workflow_saved = True
+            self._refresh_raman_workflow()
+        return file_path
 
     def _save_all_spectra(self):
         """保存所有光谱（使用当前寻峰范围裁剪）。"""
@@ -1005,12 +1277,19 @@ class MeasurementWidget(QWidget):
         if hasattr(self, 'loaded_curve'):
             self.loaded_curve.clear()
         self.peak_markers.clear()
+        self.latest_peak_metrics = None
+        self.raman_workflow_saved = False
+        self.full_result_x = None
+        self.full_result_y = None
+        self.last_result_processing_time = None
 
         self.mode_name = mode_name
         display_name = self.tr(self.mode_name)
 
         self.result_plot.setLabel('left', display_name)
-        self.result_plot.setTitle(display_name, color='#90A4AE', size='12pt')
+        palette = get_plot_theme(load_settings().get('theme', 'dark'))
+        self.result_plot.setTitle(display_name, color=palette.title, size='12pt')
+        apply_plot_theme(self.result_plot, palette.name)
         self.result_title_label.setText(display_name)
 
         if self.mode_name in ["Reflectance", "Absorbance", "Transmission", "Raman"]:
@@ -1036,6 +1315,9 @@ class MeasurementWidget(QWidget):
         
         # 显示/隐藏波数切换按钮（仅拉曼模式）
         if hasattr(self, 'wavenumber_toggle'):
+            self.wavenumber_toggle.setChecked(False)
+            self.wavenumber_toggle.setText(self.tr("Switch to Wavenumber"))
+            self.result_plot.setLabel('bottom', self.tr('Wavelength (nm)'))
             if self.mode_name == "Raman":
                 self.wavenumber_toggle.setVisible(True)
             else:
@@ -1068,6 +1350,7 @@ class MeasurementWidget(QWidget):
         self.background_curve.clear()
         self.reference_curve.clear()
         print(self.tr("Measurement page switched to: {0}").format(display_name))
+        self._refresh_raman_workflow()
         self._toggle_acquisition(True)
 
     def update_plot(self):
@@ -1077,17 +1360,25 @@ class MeasurementWidget(QWidget):
                 return
 
             self.signal_curve.setData(self.wavelengths, raw_signal)
+            self._record_recent_signal_frame(raw_signal)
 
             if self.processor.background_spectrum is None:
                 self.background_curve.setData(self.wavelengths, raw_signal)
             if self.processor.reference_spectrum is None:
                 self.reference_curve.setData(self.wavelengths, raw_signal)
 
-            self.processor.update_signal(raw_signal)
+            self.processor.latest_signal_spectrum = raw_signal
+            current_time = time.monotonic()
+            if should_process_realtime_result(
+                current_time,
+                self.last_result_processing_time,
+                self.result_processing_interval_s,
+            ):
+                self.processor.update_signal(raw_signal)
+                self.last_result_processing_time = current_time
 
             # === 动力学采样：统一使用 monotonic 计时，首帧兜底 ===
             if self.is_kinetics_monitoring:
-                current_time = time.monotonic()
                 interval = float(self.kinetics_interval_spinbox.value())
 
                 if self.kinetics_start_time is None:
@@ -1141,6 +1432,35 @@ class MeasurementWidget(QWidget):
         except queue.Empty:
             pass
 
+    def _record_recent_signal_frame(self, raw_signal):
+        if raw_signal is None:
+            return
+        if not hasattr(self, 'recent_signal_frames'):
+            count = getattr(self, 'background_reference_average_count', 10)
+            self.recent_signal_frames = deque(maxlen=count)
+        self.recent_signal_frames.append(np.array(raw_signal, dtype=float, copy=True))
+
+    def _average_recent_signal_frames(self):
+        frames = list(getattr(self, 'recent_signal_frames', []))
+        if frames:
+            latest_shape = frames[-1].shape
+            compatible_frames = [frame for frame in frames if frame.shape == latest_shape]
+            if compatible_frames:
+                return np.mean(np.stack(compatible_frames, axis=0), axis=0)
+
+        latest = getattr(self.processor, 'latest_signal_spectrum', None)
+        if latest is None:
+            return None
+        return np.array(latest, dtype=float, copy=True)
+
+    def _capture_background_average(self):
+        averaged_signal = self._average_recent_signal_frames()
+        self.processor.set_background_from_spectrum(averaged_signal)
+
+    def _capture_reference_average(self):
+        averaged_signal = self._average_recent_signal_frames()
+        self.processor.set_reference_from_spectrum(averaged_signal)
+
     def _on_result_updated(self, x_data, y_data):
         """确保接收到的数据在处理前被转换为Numpy数组。"""
         self.full_result_x = np.array(x_data)
@@ -1152,7 +1472,12 @@ class MeasurementWidget(QWidget):
         if hasattr(self, 'set_baseline_button'):
             self.set_baseline_button.setEnabled(self.full_result_y is not None)
 
+        if self.full_result_y is None:
+            self.latest_peak_metrics = None
+            self.raman_workflow_saved = False
+
         self._update_result_plot_with_crop()
+        self._refresh_raman_workflow()
     
     def _update_smoothing_params(self):
         """当平滑参数改变时更新处理器。"""
@@ -1231,12 +1556,18 @@ class MeasurementWidget(QWidget):
             self.background_curve.setData(x_data, y_data)
         else:
             self.background_curve.clear()
+        if self.mode_name == "Raman":
+            self.raman_workflow_saved = False
+        self._refresh_raman_workflow()
 
     def _on_reference_updated(self, x_data, y_data):
         if y_data is not None:
             self.reference_curve.setData(x_data, y_data)
         else:
             self.reference_curve.clear()
+        if self.mode_name == "Raman":
+            self.raman_workflow_saved = False
+        self._refresh_raman_workflow()
 
     def _on_toggle_button_clicked(self):
         """专门响应按钮点击的槽函数，明确地切换采集状态。"""
@@ -1249,6 +1580,7 @@ class MeasurementWidget(QWidget):
 
         if start:
             self.is_acquiring = True
+            self.last_result_processing_time = None
             self.toggle_acq_button.setText(self.tr("Stop Acquisition"))
 
             if hasattr(self, 'acquisition_thread') and self.acquisition_thread and self.acquisition_thread.is_alive():
@@ -1280,19 +1612,49 @@ class MeasurementWidget(QWidget):
                 self.acquisition_thread.join(timeout=0.5)
 
             print(self.tr("Acquisition thread has stopped."))
+        self._refresh_raman_workflow()
 
     def _on_integration_time_changed(self, value):
         if self.controller:
             self.controller.set_integration_time(value)
 
+    def _on_scans_to_average_changed(self, value):
+        if self.controller:
+            self.controller.set_scans_to_average(value)
+
+    def _apply_current_hardware_settings(self):
+        if not self.controller:
+            return
+        if hasattr(self, 'integration_time_spinbox'):
+            self.controller.set_integration_time(self.integration_time_spinbox.value())
+        if hasattr(self, 'scans_to_average_spinbox'):
+            self.controller.set_scans_to_average(self.scans_to_average_spinbox.value())
+
     def acquisition_thread_func(self):
         while not self.stop_event.is_set():
             if self.controller and self.is_acquiring:
-                _, spectrum = self.controller.get_spectrum()
+                try:
+                    _, spectrum = self.controller.get_spectrum()
+                except Exception as exc:
+                    message = str(exc)
+                    repeat_count = getattr(self, '_acquisition_error_repeat_count', 0) + 1
+                    self._acquisition_error_repeat_count = repeat_count
+                    if (
+                        message != getattr(self, '_last_acquisition_error_message', None)
+                        or repeat_count == 1
+                        or repeat_count % 50 == 0
+                    ):
+                        print(self.tr("Acquisition error: {0}").format(message))
+                    self._last_acquisition_error_message = message
+                    time.sleep(getattr(self, 'acquisition_error_backoff_s', 0.05))
+                    continue
+
+                self._last_acquisition_error_message = None
+                self._acquisition_error_repeat_count = 0
                 if not self.data_queue.full():
                     self.data_queue.put(np.array(spectrum))
             else:
-                time.sleep(0.1)
+                time.sleep(getattr(self, 'acquisition_idle_sleep_s', 0.1))
 
     def stop_all_activities(self):
         if self.is_kinetics_monitoring:
@@ -1610,6 +1972,7 @@ Do you wish to continue?'''),
             # 调用控制器设置激光状态
             if self.controller:
                 self.controller.set_laser_state(False)
+        self._refresh_raman_workflow()
 
     def _send_current_result_to_lspr_ai_workbench(self):
         if self.full_result_x is None or self.full_result_y is None:
@@ -1734,7 +2097,9 @@ Do you wish to continue?'''),
 
         display_name = self.tr(self.mode_name)
         self.result_plot.setLabel('left', display_name)
-        self.result_plot.setTitle(display_name, color='#90A4AE', size='12pt')
+        palette = get_plot_theme(load_settings().get('theme', 'dark'))
+        self.result_plot.setTitle(display_name, color=palette.title, size='12pt')
+        apply_plot_theme(self.result_plot, palette.name)
         self.result_title_label.setText(display_name)
 
     def _update_popout_button_icon(self, button):
@@ -1785,44 +2150,23 @@ Do you wish to continue?'''),
     def _update_plot_backgrounds(self):
         """根据当前主题更新图表背景"""
         try:
-            from ..utils.config_manager import load_settings
             settings = load_settings()
             theme = settings.get('theme', 'dark')
-            
-            # 定义不同主题的背景色和网格透明度
-            if theme == 'light':
-                background_color = '#F0F0F0'  # 偏暗的浅色背景
-                grid_alpha = 0.1
-                # 浅色主题下坐标轴和坐标使用黑色
-                axis_pen = pg.mkPen("#000000", width=1)
-                text_pen = pg.mkPen("#000000")
-            else:
-                background_color = '#1F2735'  # 深色背景
-                grid_alpha = 0.3
-                # 深色主题下坐标轴和坐标使用浅色
-                axis_pen = pg.mkPen("#4D5A6D", width=1)
-                text_pen = pg.mkPen("#E2E8F0")
-                
-            # 更新所有图表的背景
+            palette = get_plot_theme(theme)
+
             for plot in [self.signal_plot, self.background_plot, self.reference_plot, self.result_plot]:
-                plot.setBackground(background_color)
-                plot.showGrid(x=True, y=True, alpha=grid_alpha)
-                # 设置坐标轴和坐标文本颜色
-                for axis in ("left", "bottom"):
-                    ax = plot.getPlotItem().getAxis(axis)
-                    ax.setPen(axis_pen)
-                    ax.setTextPen(text_pen)
-                
-            # 更新图例文字颜色
-            text_color = '#000000' if theme == 'light' else '#E2E8F0'
-            for plot in [self.signal_plot, self.background_plot, self.reference_plot, self.result_plot]:
-                legend = plot.getPlotItem().legend
-                if legend:
-                    for item in legend.items:
-                        label = item[1]  # item is a tuple (sample, label)
-                        label.setText(label.text, color=text_color)
-        except Exception:
-            pass  # 忽略错误
+                apply_plot_theme(plot, palette.name)
+
+            title_style = f"color: {palette.title}; font-size: 12pt;"
+            for label in [
+                self.signal_title_label,
+                self.background_title_label,
+                self.reference_title_label,
+                self.result_title_label,
+            ]:
+                label.setStyleSheet(title_style)
+        except Exception as exc:
+            print(f"更新测量页图表主题时出错: {exc}")
     
     def wavelength_to_raman_shift(self, wavelengths, excitation_wavelength):
         """
@@ -1831,10 +2175,7 @@ Do you wish to continue?'''),
         :param excitation_wavelength: 激发波长（nm）
         :return: 拉曼位移数组（cm⁻¹）
         """
-        lambda_exc = excitation_wavelength * 1e-7  # 转换为cm
-        lambda_em = wavelengths * 1e-7  # 转换为cm
-        raman_shift = 10000 * (1/lambda_exc - 1/lambda_em)
-        return raman_shift
+        return calculate_raman_shift(wavelengths, excitation_wavelength)
     
     def raman_shift_to_wavelength(self, raman_shifts, excitation_wavelength):
         """
@@ -1843,10 +2184,7 @@ Do you wish to continue?'''),
         :param excitation_wavelength: 激发波长（nm）
         :return: 波长数组（nm）
         """
-        lambda_exc = excitation_wavelength * 1e-7  # 转换为cm
-        raman_shift_cm = raman_shifts / 10000  # 转换为cm⁻¹
-        lambda_em = 1 / (1/lambda_exc - raman_shift_cm)
-        return lambda_em * 1e7  # 转换回nm
+        return raman_shift_to_wavelength(raman_shifts, excitation_wavelength)
     
     def _toggle_wavelength_wavenumber(self):
         """
@@ -1855,11 +2193,13 @@ Do you wish to continue?'''),
         if self.mode_name != "Raman":
             QMessageBox.warning(self, self.tr("Warning"), self.tr("Wavenumber display is only available in Raman mode"))
             self.wavenumber_toggle.setChecked(False)
+            self._refresh_raman_workflow()
             return
         
         if self.full_result_x is None or self.full_result_y is None:
             QMessageBox.warning(self, self.tr("Warning"), self.tr("No spectrum data available"))
             self.wavenumber_toggle.setChecked(False)
+            self._refresh_raman_workflow()
             return
         
         excitation_wavelength = self.excitation_wavelength_spinbox.value()
@@ -1923,3 +2263,4 @@ Do you wish to continue?'''),
                     main_peak_wavelength = self.raman_shift_to_wavelength(np.array([main_peak_wavenumber]), excitation_wavelength)[0]
                     self.main_peak_marker.setData([main_peak_wavelength], [main_peak_intensity])
                     self.main_peak_wavelength_label.setText(f"{main_peak_wavelength:.2f}")
+        self._refresh_raman_workflow()

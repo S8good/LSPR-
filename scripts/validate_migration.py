@@ -21,7 +21,7 @@ import argparse
 import csv
 import sqlite3
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -188,7 +188,7 @@ def check_batch_status(conn: sqlite3.Connection) -> Tuple[List[Tuple[int, int]],
 
 def write_report(report_path: Path, errors: List[str], warnings: List[str], strict: bool) -> datetime:
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(UTC)
+    timestamp = datetime.now(timezone.utc)
     with report_path.open("w", encoding="utf-8") as handle:
         handle.write(f"Timestamp: {timestamp.isoformat()}\n")
         if errors:
@@ -394,7 +394,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("\n[OK] Validation completed.")
 
     # 报告与历史记录
-    report_timestamp = datetime.now(UTC)
+    report_timestamp = datetime.now(timezone.utc)
     if args.report_file:
         report_timestamp = write_report(Path(args.report_file), errors, warnings, args.strict)
     if args.history_file:
@@ -415,4 +415,3 @@ __all__ = [
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -5,6 +5,9 @@ from PyQt5.QtCore import pyqtSignal, QEvent  # 【修改】导入 QEvent
 
 import pyqtgraph as pg
 
+from ..utils.config_manager import load_settings
+from ..utils.plot_theme import apply_plot_theme, get_plot_theme
+
 
 class SinglePlotWindow(QMainWindow):
     closed = pyqtSignal(object)
@@ -26,23 +29,7 @@ class SinglePlotWindow(QMainWindow):
         self.plot_widget = pg.PlotWidget()
         # self.plot_widget.setTitle(title, color='#90A4AE', size='12pt') # 标题将在 _retranslate_ui 中设置
         self.plot_widget.showGrid(x=True, y=True)
-        
-        # 根据主题设置背景色和坐标轴样式
-        from ..utils.config_manager import load_settings
-        settings = load_settings()
-        theme = settings.get('theme', 'dark')
-        if theme == 'light':
-            self.plot_widget.setBackground('#F0F0F0')
-            self.plot_widget.getAxis('bottom').setPen(pg.mkPen('#212529', width=1))
-            self.plot_widget.getAxis('left').setPen(pg.mkPen('#212529', width=1))
-            self.plot_widget.getAxis('bottom').setTextPen(pg.mkPen('#495057'))
-            self.plot_widget.getAxis('left').setTextPen(pg.mkPen('#495057'))
-        else:
-            self.plot_widget.setBackground('#1F2735')
-            self.plot_widget.getAxis('bottom').setPen(pg.mkPen('#90A4AE', width=1))
-            self.plot_widget.getAxis('left').setPen(pg.mkPen('#90A4AE', width=1))
-            self.plot_widget.getAxis('bottom').setTextPen(pg.mkPen('#B0BEC5'))
-            self.plot_widget.getAxis('left').setTextPen(pg.mkPen('#B0BEC5'))
+        apply_plot_theme(self.plot_widget, load_settings().get('theme', 'dark'))
         self.setCentralWidget(central_widget)
 
         self.curve = self.plot_widget.plot()
@@ -109,8 +96,10 @@ class SinglePlotWindow(QMainWindow):
         """重新翻译此窗口内的所有UI文本。"""
         # 翻译窗口和图表的标题
         translated_title = self.tr(self.window_title_source)
+        palette = get_plot_theme(load_settings().get('theme', 'dark'))
         self.setWindowTitle(translated_title)
-        self.plot_widget.setTitle(translated_title, color='#90A4AE', size='12pt')
+        self.plot_widget.setTitle(translated_title, color=palette.title, size='12pt')
+        apply_plot_theme(self.plot_widget, palette.name)
 
         # 翻译按钮文本
         self.reset_view_button.setText(self.tr("Reset View"))

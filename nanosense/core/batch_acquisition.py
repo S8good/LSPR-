@@ -36,8 +36,16 @@ from PyQt5.QtSvg import QSvgRenderer
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 from .controller import FX2000Controller
+from .batch_preview import (
+    PREVIEW_EMIT_INTERVAL_S,
+    apply_batch_preprocessing,
+    build_batch_preview_package,
+    calculate_absorbance as _calculate_absorbance,
+    should_emit_preview,
+)
 from ..utils.file_io import save_batch_spectrum_data, load_spectrum_from_path
 from ..gui.single_plot_window import SinglePlotWindow
+from ..utils.plot_theme import apply_plot_theme, get_plot_theme
 
 PROGRESS_BAR_STYLE = """
 QProgressBar {
@@ -70,31 +78,6 @@ QProgressBar::chunk {
 """
 
 
-def _calculate_absorbance(signal, background, reference):
-    """Compute absorbance from signal, background, and reference spectra."""
-    if signal is None or background is None or reference is None:
-        return None
-    signal = np.array(signal, dtype=float)
-    background = np.array(background, dtype=float)
-    reference = np.array(reference, dtype=float)
-    valid_mask = (
-        np.isfinite(signal)
-        & np.isfinite(background)
-        & np.isfinite(reference)
-    )
-    if not np.any(valid_mask):
-        return None
-    absorbance = np.full(signal.shape, np.nan, dtype=float)
-    sig_eff = signal[valid_mask] - background[valid_mask]
-    ref_eff = reference[valid_mask] - background[valid_mask]
-    safe_denominator = np.copy(ref_eff)
-    safe_denominator[safe_denominator == 0] = 1e-9
-    transmittance = sig_eff / safe_denominator
-    transmittance[transmittance <= 0] = 1e-9
-    absorbance[valid_mask] = -1 * np.log10(transmittance)
-    return absorbance
-
-
 class MultiCurvePlotWindow(pg.QtWidgets.QMainWindow):
     closed = pyqtSignal(object)
 
@@ -120,6 +103,7 @@ class MultiCurvePlotWindow(pg.QtWidgets.QMainWindow):
             
         self.setCentralWidget(self.plot_widget)
         self.plot_widget.addLegend()
+        apply_plot_theme(self.plot_widget, theme)
         self.curves = []  # Track existing curves
 
     def update_data(self, wavelengths, spectra_list):
@@ -360,11 +344,12 @@ class BatchRunDialog(QDialog):
             title_label = QLabel(self.tr(title_key))
             
             # Use cached theme setting
+            palette = get_plot_theme(self._theme)
             if self._theme == 'light':
-                title_label.setStyleSheet("color: #495057; font-size: 12pt; font-weight: bold;")
+                title_label.setStyleSheet(f"color: {palette.title}; font-size: 12pt; font-weight: bold;")
                 header_widget.setStyleSheet("background-color: #F5F6FA;")
             else:
-                title_label.setStyleSheet("color: #90A4AE; font-size: 12pt;")
+                title_label.setStyleSheet(f"color: {palette.title}; font-size: 12pt;")
                 header_widget.setStyleSheet("background-color: transparent;")
             
             popout_button = QToolButton()
@@ -396,6 +381,7 @@ class BatchRunDialog(QDialog):
             layout.addWidget(plot_widget)
             plot_widget.setTitle("")
             plot_widget.showGrid(x=True, y=True, alpha=0.3)
+            apply_plot_theme(plot_widget, self._theme)
             return container
 
 
@@ -558,7 +544,7 @@ class BatchRunDialog(QDialog):
         processing_settings_layout.addWidget(self.processing_settings_button)
         
         self.settings_summary_label = QLabel()
-        self.settings_summary_label.setStyleSheet("color: #90A4AE; font-size: 11px;")
+        self.settings_summary_label.setStyleSheet(f"color: {get_plot_theme(self._theme).axis}; font-size: 11px;")
         processing_settings_layout.addWidget(self.settings_summary_label)
         processing_settings_layout.addStretch()
         main_layout.addLayout(processing_settings_layout)
@@ -580,7 +566,7 @@ class BatchRunDialog(QDialog):
         progress_layout.setContentsMargins(0, 4, 0, 0)
         progress_layout.setSpacing(4)
         self.progress_info_label = QLabel()
-        self.progress_info_label.setStyleSheet("color: #90A4AE; font-size: 11px;")
+        self.progress_info_label.setStyleSheet(f"color: {get_plot_theme(self._theme).axis}; font-size: 11px;")
         self.total_progress_bar = QProgressBar()
         self.total_progress_bar.setStyleSheet(PROGRESS_BAR_STYLE)
         self.point_progress_bar = QProgressBar()
@@ -695,10 +681,11 @@ class BatchRunDialog(QDialog):
         title_label = QLabel(self.tr("Peak Results"))
         
         # Set title color based on theme
+        palette = get_plot_theme(self._theme)
         if self._theme == 'light':
-            title_label.setStyleSheet("color: #495057; font-size: 12pt; font-weight: bold;")
+            title_label.setStyleSheet(f"color: {palette.title}; font-size: 12pt; font-weight: bold;")
         else:
-            title_label.setStyleSheet("color: #90A4AE; font-size: 12pt;")
+            title_label.setStyleSheet(f"color: {palette.title}; font-size: 12pt;")
             
         header_layout.addWidget(title_label)
         header_layout.addStretch()
@@ -836,12 +823,15 @@ class BatchRunDialog(QDialog):
         for button, key in tooltip_map.items():
             button.setToolTip(self.tr(key))
 
-        title_style = {"color": "#90A4AE", "size": "12pt"}
+        palette = get_plot_theme(self._theme)
+        title_style = {"color": palette.title, "size": "12pt"}
         self.signal_plot.setTitle(self.tr("Live Signal"), **title_style)
         self.background_plot.setTitle(self.tr("Current Background"), **title_style)
         self.reference_plot.setTitle(self.tr("Current Reference"), **title_style)
         self.result_plot.setTitle(self.tr("Live Result (Absorbance)"), **title_style)
         self.summary_plot.setTitle(self.tr("Accumulated Results Summary"), **title_style)
+        for plot in (self.signal_plot, self.background_plot, self.reference_plot, self.result_plot, self.summary_plot):
+            apply_plot_theme(plot, self._theme)
 
         self.toggle_summary_button.setText(self.tr("Pause Overlay"))
         self.clear_summary_button.setText(self.tr("Clear Summary Plot"))
@@ -899,21 +889,24 @@ class BatchRunDialog(QDialog):
         current_result = None
         result_series: Any = []
         if result_wavelengths is not None:
-            live_signal_np = np.array(live_signal) if live_signal is not None else None
-            background_np = np.array(background) if background is not None else None
-            reference_np = np.array(reference) if reference is not None else None
-            mask = np.isin(full_wavelengths, result_wavelengths)
-            signal_cropped = live_signal_np[mask] if live_signal_np is not None else None
-            background_cropped = background_np[mask] if background_np is not None else None
-            reference_cropped = reference_np[mask] if reference_np is not None else None
-            current_result = _calculate_absorbance(
-                signal_cropped, background_cropped, reference_cropped
-            )
-            
-            # 应用预处理
-            if current_result is not None:
-                current_result = self._apply_preprocessing(current_result, result_wavelengths)
-            
+            if "live_result" in data_package:
+                current_result = data_package.get("live_result")
+            else:
+                live_signal_np = np.array(live_signal) if live_signal is not None else None
+                background_np = np.array(background) if background is not None else None
+                reference_np = np.array(reference) if reference is not None else None
+                mask = np.isin(full_wavelengths, result_wavelengths)
+                signal_cropped = live_signal_np[mask] if live_signal_np is not None else None
+                background_cropped = background_np[mask] if background_np is not None else None
+                reference_cropped = reference_np[mask] if reference_np is not None else None
+                current_result = _calculate_absorbance(
+                    signal_cropped, background_cropped, reference_cropped
+                )
+
+                # 应用预处理
+                if current_result is not None:
+                    current_result = self._apply_preprocessing(current_result, result_wavelengths)
+
             result_series = current_result if current_result is not None else []
             self.result_curve.setData(result_wavelengths, result_series)
         else:
@@ -1020,58 +1013,7 @@ class BatchRunDialog(QDialog):
     
     def _apply_preprocessing(self, absorbance, wavelengths):
         """根据processing_settings应用预处理（与Worker中的方法相同）"""
-        import numpy as np
-        from scipy.signal import savgol_filter
-        from nanosense.algorithms.preprocessing import baseline_als
-        
-        # 复制数据
-        processed = np.array(absorbance, copy=True)
-        
-        # 1. 应用平滑
-        smoothing_method = self.processing_settings.get('smoothing_method', 'Savitzky-Golay')
-        smoothing_window = self.processing_settings.get('smoothing_window', 11)
-        
-        try:
-            if smoothing_method == 'Savitzky-Golay':
-                smoothing_order = self.processing_settings.get('smoothing_order', 3)
-                # 确保窗口是奇数且小于数据长度
-                window = min(smoothing_window, len(processed))
-                if window % 2 == 0:
-                    window -= 1
-                if window >= smoothing_order + 2:
-                    processed = savgol_filter(processed, window, smoothing_order)
-            elif smoothing_method == 'Moving Average':
-                # 简单移动平均
-                window = min(smoothing_window, len(processed))
-                if window % 2 == 0:
-                    window -= 1
-                kernel = np.ones(window) / window
-                processed = np.convolve(processed, kernel, mode='same')
-        except Exception as e:
-            print(f"Smoothing error: {e}")
-        
-        # 2. 应用基线校正
-        baseline_enabled = self.processing_settings.get('baseline_enabled', False)
-        if baseline_enabled:
-            baseline_algorithm = self.processing_settings.get('baseline_algorithm', 'ALS')
-            
-            try:
-                if baseline_algorithm == 'ALS':
-                    lambda_param = self.processing_settings.get('baseline_lambda', 5000000)
-                    p_param = self.processing_settings.get('baseline_p', 0.001)
-                    niter = self.processing_settings.get('baseline_niter', 10)
-                    baseline = baseline_als(processed, lam=lambda_param, p=p_param, niter=int(niter))
-                    processed = processed - baseline
-                elif baseline_algorithm == 'SNIP':
-                    baseline = correct_baseline(wavelengths, processed, method='snip')
-                    processed = processed - baseline
-                elif baseline_algorithm == 'Linear':
-                    baseline = correct_baseline(wavelengths, processed, method='linear')
-                    processed = processed - baseline
-            except Exception as e:
-                print(f"Baseline correction error: {e}")
-        
-        return processed
+        return apply_batch_preprocessing(absorbance, wavelengths, self.processing_settings)
     
     def _progress_text(self) -> str:
         return self.tr("Total progress: {total}% | Current well: {point}%").format(
@@ -1216,6 +1158,7 @@ class BatchAcquisitionWorker(SafeEmitMixin, QObject):
         self.spectrum_registry = defaultdict(lambda: defaultdict(list))
         self.capture_counts = defaultdict(int)
         self.completed_wells = set()
+        self.preview_emit_interval_s = PREVIEW_EMIT_INTERVAL_S
         
         # Initialize instrument and processing info
         base_instrument = dict(instrument_info) if instrument_info else {}
@@ -1286,58 +1229,7 @@ class BatchAcquisitionWorker(SafeEmitMixin, QObject):
     
     def _apply_preprocessing(self, absorbance, wavelengths):
         """根据processing_settings应用预处理"""
-        import numpy as np
-        from scipy.signal import savgol_filter
-        from nanosense.algorithms.preprocessing import baseline_als
-        
-        # 复制数据
-        processed = np.array(absorbance, copy=True)
-        
-        # 1. 应用平滑
-        smoothing_method = self.processing_settings.get('smoothing_method', 'Savitzky-Golay')
-        smoothing_window = self.processing_settings.get('smoothing_window', 11)
-        
-        try:
-            if smoothing_method == 'Savitzky-Golay':
-                smoothing_order = self.processing_settings.get('smoothing_order', 3)
-                # 确conserve窗口是奇数且小于数据长度
-                window = min(smoothing_window, len(processed))
-                if window % 2 == 0:
-                    window -= 1
-                if window >= smoothing_order + 2:
-                    processed = savgol_filter(processed, window, smoothing_order)
-            elif smoothing_method == 'Moving Average':
-                # 简单移动平均
-                window = min(smoothing_window, len(processed))
-                if window % 2 == 0:
-                    window -= 1
-                kernel = np.ones(window) / window
-                processed = np.convolve(processed, kernel, mode='same')
-        except Exception as e:
-            print(f"Smoothing error: {e}")
-        
-        # 2. 应用基线校正
-        baseline_enabled = self.processing_settings.get('baseline_enabled', False)
-        if baseline_enabled:
-            baseline_algorithm = self.processing_settings.get('baseline_algorithm', 'ALS')
-            
-            try:
-                if baseline_algorithm == 'ALS':
-                    lambda_param = self.processing_settings.get('baseline_lambda', 5000000)
-                    p_param = self.processing_settings.get('baseline_p', 0.001)
-                    niter = self.processing_settings.get('baseline_niter', 10)
-                    baseline = baseline_als(processed, lam=lambda_param, p=p_param, niter=int(niter))
-                    processed = processed - baseline
-                elif baseline_algorithm == 'SNIP':
-                    baseline = correct_baseline(wavelengths, processed, method='snip')
-                    processed = processed - baseline
-                elif baseline_algorithm == 'Linear':
-                    baseline = correct_baseline(wavelengths, processed, method='linear')
-                    processed = processed - baseline
-            except Exception as e:
-                print(f"Baseline correction error: {e}")
-        
-        return processed
+        return apply_batch_preprocessing(absorbance, wavelengths, self.processing_settings)
 
 
     def request_collect(self):
@@ -1377,19 +1269,26 @@ class BatchAcquisitionWorker(SafeEmitMixin, QObject):
         all_completed_results = []
         for well_id, data in self.collected_data.items():
             all_completed_results.extend(data["absorbance"].values())
+        last_preview_emit = None
         while (time.time() - start_time) < duration:
             if not self._is_running:
                 return False
             _, spectrum = self.controller.get_spectrum()
-            data_package = {
-                "full_wavelengths": self.wavelengths,
-                "live_signal": spectrum,
-                "background": current_well_data.get("background"),
-                "reference": current_well_data.get("reference"),
-                "result_wavelengths": self.cropped_wavelengths,
-                "all_results": all_completed_results,
-            }
-            self._safe_emit(self.live_preview_data, data_package)
+            now = time.monotonic()
+            if should_emit_preview(now, last_preview_emit, self.preview_emit_interval_s):
+                data_package = build_batch_preview_package(
+                    wavelengths=self.wavelengths,
+                    live_signal=spectrum,
+                    background=current_well_data.get("background"),
+                    reference=current_well_data.get("reference"),
+                    result_wavelengths=self.cropped_wavelengths,
+                    wavelength_mask=self.wavelength_mask,
+                    all_results=all_completed_results,
+                    preprocess=self._apply_preprocessing,
+                )
+                if not self._safe_emit(self.live_preview_data, data_package):
+                    return False
+                last_preview_emit = now
             QThread.msleep(50)
         return True
 
@@ -1403,18 +1302,25 @@ class BatchAcquisitionWorker(SafeEmitMixin, QObject):
         all_completed_results = []
         for well_id, data in self.collected_data.items():
             all_completed_results.extend(data["absorbance"].values())
+        last_preview_emit = None
         while self.command_queue.empty() and self._is_running:
             _, spectrum = self.controller.get_spectrum()
             last_spectrum = spectrum
-            data_package = {
-                "full_wavelengths": self.wavelengths,
-                "live_signal": spectrum,
-                "background": current_well_data.get("background"),
-                "reference": current_well_data.get("reference"),
-                "result_wavelengths": self.cropped_wavelengths,
-                "all_results": all_completed_results,
-            }
-            self._safe_emit(self.live_preview_data, data_package)
+            now = time.monotonic()
+            if should_emit_preview(now, last_preview_emit, self.preview_emit_interval_s):
+                data_package = build_batch_preview_package(
+                    wavelengths=self.wavelengths,
+                    live_signal=spectrum,
+                    background=current_well_data.get("background"),
+                    reference=current_well_data.get("reference"),
+                    result_wavelengths=self.cropped_wavelengths,
+                    wavelength_mask=self.wavelength_mask,
+                    all_results=all_completed_results,
+                    preprocess=self._apply_preprocessing,
+                )
+                if not self._safe_emit(self.live_preview_data, data_package):
+                    break
+                last_preview_emit = now
             QThread.msleep(50)
         command = ("STOP", None)
         if self._is_running:

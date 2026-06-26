@@ -5,6 +5,9 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QDialogButtonBox,
 from PyQt5.QtCore import QTimer, QEvent
 import pyqtgraph as pg
 
+from ..utils.config_manager import load_settings
+from ..utils.plot_theme import apply_plot_theme, get_plot_theme
+
 class RealTimeNoiseSetupDialog(QDialog):
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -29,22 +32,17 @@ class RealTimeNoiseSetupDialog(QDialog):
         # 预览图
         self.preview_plot = pg.PlotWidget()
         
-        # 根据主题设置背景色
         try:
-            from ..utils.config_manager import load_settings
             settings = load_settings()
             theme = settings.get('theme', 'dark')
             if theme == 'light':
-                self.preview_plot.setBackground('#F0F0F0')
-                # 浅色主题下使用深色曲线
                 self.preview_curve = self.preview_plot.plot(pen=pg.mkPen('k', width=2))
             else:
-                self.preview_plot.setBackground('#1F2735')
-                # 深色主题下使用青色曲线
-                self.preview_curve = self.preview_plot.plot(pen='c')
+                self.preview_curve = self.preview_plot.plot(pen=pg.mkPen('c', width=2))
+            apply_plot_theme(self.preview_plot, theme)
         except Exception:
-            self.preview_plot.setBackground('#1F2735')
-            self.preview_curve = self.preview_plot.plot(pen='c')
+            self.preview_curve = self.preview_plot.plot(pen=pg.mkPen('c', width=2))
+            apply_plot_theme(self.preview_plot, 'dark')
         main_layout.addWidget(self.preview_plot, 1)
 
         # 设置区域
@@ -85,9 +83,11 @@ class RealTimeNoiseSetupDialog(QDialog):
 
     def _retranslate_ui(self):
         self.setWindowTitle(self.tr("Real-time Noise Analysis Setup"))
-        self.preview_plot.setTitle(self.tr("Live Blank Sample Preview"), color='#90A4AE', size='12pt')
+        palette = get_plot_theme(load_settings().get('theme', 'dark'))
+        self.preview_plot.setTitle(self.tr("Live Blank Sample Preview"), color=palette.title, size='12pt')
         self.preview_plot.setLabel('bottom', self.tr('Wavelength (nm)'))
         self.preview_plot.setLabel('left', self.tr('Intensity'))
+        apply_plot_theme(self.preview_plot, palette.name)
         self.spectra_count_label.setText(self.tr("Number of spectra to collect:"))
         self.interval_label.setText(self.tr("Acquisition Interval (s):"))
         self.start_button.setText(self.tr("Start Analysis"))

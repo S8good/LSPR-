@@ -6,6 +6,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QWi
 from PyQt5.QtCore import QEvent
 import pyqtgraph as pg
 from nanosense.utils.file_io import load_spectrum
+from nanosense.utils.config_manager import load_settings
+from nanosense.utils.plot_theme import apply_plot_theme, get_plot_theme
 import os
 
 
@@ -76,9 +78,9 @@ class ThreeFileImportDialog(QDialog):
         self.bg_plot = pg.PlotWidget()
         self.ref_plot = pg.PlotWidget()
 
-        self.signal_curve = self.signal_plot.plot(pen='c')
-        self.bg_curve = self.bg_plot.plot(pen='w')
-        self.ref_curve = self.ref_plot.plot(pen='m')
+        self.signal_curve = self.signal_plot.plot(pen=pg.mkPen('#1F77B4', width=2))
+        self.bg_curve = self.bg_plot.plot(pen=pg.mkPen('#FF7F0E', width=2))
+        self.ref_curve = self.ref_plot.plot(pen=pg.mkPen('#2CA02C', width=2))
 
         preview_layout.addWidget(self.signal_plot)
         preview_layout.addWidget(self.bg_plot)
@@ -87,7 +89,7 @@ class ThreeFileImportDialog(QDialog):
 
         # --- 区域 C: 结果预览区 ---
         self.result_plot = pg.PlotWidget()
-        self.result_curve = self.result_plot.plot(pen='y')
+        self.result_curve = self.result_plot.plot(pen=pg.mkPen('#D62728', width=2))
         main_layout.addWidget(self.result_plot, stretch=1)
 
         # --- 确定/取消按钮 ---
@@ -123,11 +125,14 @@ class ThreeFileImportDialog(QDialog):
         self.bg_btn.setText(browse_text)
         self.ref_btn.setText(browse_text)
 
-        title_style = {'color': '#90A4AE', 'font-size': '10pt'}
+        palette = get_plot_theme(load_settings().get('theme', 'dark'))
+        title_style = {'color': palette.title, 'font-size': '10pt'}
         self.signal_plot.setTitle(self.tr("Signal Spectrum Preview"), **title_style)
         self.bg_plot.setTitle(self.tr("Background Spectrum Preview"), **title_style)
         self.ref_plot.setTitle(self.tr("Reference Spectrum Preview"), **title_style)
         self.result_plot.setTitle(self.tr("Result (Absorbance)"), **title_style)
+        for plot in (self.signal_plot, self.bg_plot, self.ref_plot, self.result_plot):
+            apply_plot_theme(plot, palette.name)
 
         self.button_box.button(QDialogButtonBox.Ok).setText(self.tr("OK"))
         self.button_box.button(QDialogButtonBox.Cancel).setText(self.tr("Cancel"))
@@ -135,33 +140,22 @@ class ThreeFileImportDialog(QDialog):
     def _update_plot_styles(self):
         """根据当前主题更新图表样式"""
         try:
-            from ..utils.config_manager import load_settings
             settings = load_settings()
             theme = settings.get('theme', 'dark')
-            
-            # 定义不同主题的样式
-            if theme == 'light':
-                background_color = '#F0F0F0'  # 偏暗的浅色背景
-                grid_alpha = 0.1
-                # 浅色主题下坐标轴和坐标使用黑色
-                axis_pen = pg.mkPen("#000000", width=1)
-                text_pen = pg.mkPen("#000000")
-            else:
-                background_color = '#1F2735'  # 深色背景
-                grid_alpha = 0.3
-                # 深色主题下坐标轴和坐标使用浅色
-                axis_pen = pg.mkPen("#4D5A6D", width=1)
-                text_pen = pg.mkPen("#E2E8F0")
-                
-            # 更新所有图表的背景和样式
+
             for plot in [self.signal_plot, self.bg_plot, self.ref_plot, self.result_plot]:
-                plot.setBackground(background_color)
-                plot.showGrid(x=True, y=True, alpha=grid_alpha)
-                # 设置坐标轴和坐标文本颜色
-                for axis in ("left", "bottom"):
-                    ax = plot.getPlotItem().getAxis(axis)
-                    ax.setPen(axis_pen)
-                    ax.setTextPen(text_pen)
+                apply_plot_theme(plot, theme)
+
+            if theme == 'light':
+                self.signal_curve.setPen(pg.mkPen('#1F77B4', width=2))
+                self.bg_curve.setPen(pg.mkPen('#FF7F0E', width=2))
+                self.ref_curve.setPen(pg.mkPen('#2CA02C', width=2))
+                self.result_curve.setPen(pg.mkPen('#D62728', width=2))
+            else:
+                self.signal_curve.setPen(pg.mkPen('c', width=2))
+                self.bg_curve.setPen(pg.mkPen('w', width=2))
+                self.ref_curve.setPen(pg.mkPen('m', width=2))
+                self.result_curve.setPen(pg.mkPen('y', width=2))
         except Exception:
             # 如果无法加载设置，使用默认样式
             pass
